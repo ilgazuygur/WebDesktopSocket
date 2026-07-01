@@ -1,0 +1,131 @@
+<Window x:Class="SocketDesktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shared="clr-namespace:SocketShared;assembly=SocketShared"
+        Title="SocketDesktop" Height="600" Width="420"
+        Background="#F0F2F5"
+        Loaded="Window_Loaded">
+
+    <Window.Resources>
+        <!-- A plain button with rounded corners and no default WPF chrome,
+             so it visually matches the web page's rounded Send button. -->
+        <Style x:Key="RoundedButton" TargetType="Button">
+            <Setter Property="Background" Value="#007AFF" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="18">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#0064D1" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#B0D4FB" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- One chat bubble. Messages sent as "Desktop" (this app, "mine")
+             are aligned right and colored blue; anything else (e.g. "Web")
+             is aligned left and colored light gray - matching the web page. -->
+        <DataTemplate DataType="{x:Type shared:ChatMessage}">
+            <StackPanel Margin="4">
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                        <Setter Property="HorizontalAlignment" Value="Left" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Sender}" Value="Desktop">
+                                <Setter Property="HorizontalAlignment" Value="Right" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+
+                <TextBlock Text="{Binding Sender}" FontSize="11" Foreground="#8E8E93" Margin="6,0,6,2" />
+
+                <Border MaxWidth="260" Padding="10,7" CornerRadius="14">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="#E5E5EA" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Sender}" Value="Desktop">
+                                    <Setter Property="Background" Value="#007AFF" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#1C1C1E" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Sender}" Value="Desktop">
+                                        <Setter Property="Foreground" Value="White" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Border>
+
+                <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm}'}"
+                           FontSize="10" Foreground="#8E8E93" Margin="6,2,6,0" />
+            </StackPanel>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header bar with app title and connection status pill. -->
+        <Border Grid.Row="0" Background="White" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
+            <DockPanel Margin="18,12">
+                <Border DockPanel.Dock="Right" x:Name="StatusPill" CornerRadius="12" Background="#F0F0F0" Padding="10,4">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="#FF3B30" VerticalAlignment="Center" />
+                        <TextBlock x:Name="StatusText" Text="Disconnected" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="#B3261E" Margin="6,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+                <TextBlock Text="SocketDesktop" FontSize="18" FontWeight="Bold" VerticalAlignment="Center" />
+            </DockPanel>
+        </Border>
+
+        <!-- Scrollable chat log made of bubbles, using the DataTemplate above. -->
+        <ScrollViewer x:Name="LogScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="LogList" Margin="10" />
+        </ScrollViewer>
+
+        <!-- Message input + send button. -->
+        <Border Grid.Row="2" Background="White" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+            <Grid Margin="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" CornerRadius="18" Background="#F0F0F0" Margin="0,0,8,0">
+                    <TextBox x:Name="MessageInput" Background="Transparent" BorderThickness="0"
+                             Padding="14,8" VerticalContentAlignment="Center"
+                             KeyDown="MessageInput_KeyDown" />
+                </Border>
+
+                <Button Grid.Column="1" x:Name="SendButton" Content="Send" Width="70" Height="36"
+                        Style="{StaticResource RoundedButton}" Click="SendButton_Click" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

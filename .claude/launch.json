@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "SocketWeb",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "SocketWeb"],
+      "port": 5080
+    }
+  ]
+}
