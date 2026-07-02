@@ -24,3 +24,15 @@ Thumbs.db
 
 ## Claude Code local project settings (machine-specific)
 .claude/settings.local.json
+
+## Local secrets / environment configuration - never commit real values.
+## Copy .env.example to .env and fill it in locally instead.
+.env
+*.env
+!.env.example
+appsettings.*.local.json
+SocketDesktop/appsettings.Local.json
+
+## docker-compose MySQL data volume, if ever bind-mounted locally
+mysql-data/
+

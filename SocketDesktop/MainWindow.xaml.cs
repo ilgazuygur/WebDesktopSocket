@@ -1,54 +1,44 @@
 using System.Collections.ObjectModel;
 using System.Windows;
-using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using SocketDesktop.Services;
-using SocketShared;
+using SocketShared.Ai;
 
 namespace SocketDesktop;
 
 public partial class MainWindow : Window
 {
-    private readonly SocketClientService _socketClient = new();
+    private const int MaxLogEntries = 200;
 
-    // Bound to the ItemsControl in MainWindow.xaml, which renders each
-    // ChatMessage as a chat bubble using the DataTemplate defined there.
-    // ObservableCollection automatically tells the UI to redraw itself
-    // whenever an item is added.
-    private readonly ObservableCollection<ChatMessage> _log = new();
+    private readonly DesktopSocketClient _socketClient;
 
-    public MainWindow()
+    // Bound to the ItemsControl in MainWindow.xaml - each entry is one
+    // already-formatted "HH:mm:ss  message" line.
+    private readonly ObservableCollection<string> _activityLog = new();
+
+    public MainWindow(DesktopSocketClient socketClient, AiOptions aiOptions)
     {
         InitializeComponent();
-        LogList.ItemsSource = _log;
 
-        // Whenever a message arrives from the server (originally from the
-        // web page or from this app), add it to the log.
-        _socketClient.MessageReceived += message =>
+        _socketClient = socketClient;
+        ActivityLogList.ItemsSource = _activityLog;
+
+        BaseUrlText.Text = string.IsNullOrWhiteSpace(aiOptions.BaseUrl) ? "(not set)" : aiOptions.BaseUrl;
+        ModelText.Text = string.IsNullOrWhiteSpace(aiOptions.Model) ? "(not set)" : aiOptions.Model;
+        SetApiKeyStatus(!string.IsNullOrWhiteSpace(aiOptions.ApiKey));
+
+        if (!aiOptions.IsComplete)
         {
-            // Events can arrive on a background thread, but WPF UI
-            // elements can only be touched from the UI thread, so we hop
-            // back onto it with Dispatcher.Invoke.
-            Dispatcher.Invoke(() =>
-            {
-                _log.Add(message);
-                LogScroll.ScrollToEnd();
-            });
-        };
+            AppendLog("AI configuration is incomplete - set Ai:BaseUrl / Ai:Model in appsettings.json and the AI_API_KEY environment variable. AiRequests will fail with a clear error until this is fixed.");
+        }
 
-        _socketClient.ConnectionStatusChanged += isConnected =>
-        {
-            Dispatcher.Invoke(() =>
-            {
-                StatusText.Text = isConnected ? "Connected" : "Disconnected";
-
-                var dotColor = isConnected ? Color.FromRgb(0x34, 0xC7, 0x59) : Color.FromRgb(0xFF, 0x3B, 0x30);
-                var textColor = isConnected ? Color.FromRgb(0x1A, 0x7F, 0x37) : Color.FromRgb(0xB3, 0x26, 0x1E);
-
-                StatusDot.Fill = new SolidColorBrush(dotColor);
-                StatusText.Foreground = new SolidColorBrush(textColor);
-            });
-        };
+        // Events can arrive on a background thread (the WebSocket receive
+        // loop), but WPF UI elements can only be touched from the UI
+        // thread, so every handler hops back onto it with Dispatcher.Invoke.
+        _socketClient.ConnectionStatusChanged += isConnected => Dispatcher.Invoke(() => SetConnectionStatus(isConnected));
+        _socketClient.ActivityLogged += message => Dispatcher.Invoke(() => AppendLog(message));
+        _socketClient.CurrentRequestChanged += status => Dispatcher.Invoke(() => SetCurrentRequestStatus(status));
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -56,40 +46,52 @@ public partial class MainWindow : Window
         await _socketClient.ConnectAsync();
     }
 
-    private async void SendButton_Click(object sender, RoutedEventArgs e)
+    private async void ReconnectButton_Click(object sender, RoutedEventArgs e)
     {
-        await SendCurrentMessageAsync();
+        await _socketClient.ConnectAsync();
     }
 
-    private async void MessageInput_KeyDown(object sender, KeyEventArgs e)
+    private void SetConnectionStatus(bool connected)
     {
-        if (e.Key == Key.Enter)
-        {
-            await SendCurrentMessageAsync();
-        }
+        SetPill(WsStatusDot, WsStatusText, connected, connected ? "Connected" : "Disconnected");
+
+        // Registration always tracks the WebSocket connection here - a
+        // successful HelloAck is what raises ConnectionStatusChanged(true)
+        // in the first place, and losing the connection means the
+        // registration is gone with it.
+        SetPill(RegistrationStatusDot, RegistrationStatusText, connected, connected ? "Registered as Desktop" : "Not registered");
     }
 
-    private async Task SendCurrentMessageAsync()
+    private void SetApiKeyStatus(bool hasKey)
     {
-        var text = MessageInput.Text.Trim();
-        if (text.Length == 0)
+        SetPill(ApiKeyStatusDot, ApiKeyStatusText, hasKey, hasKey ? "Configured" : "Missing");
+    }
+
+    private void SetCurrentRequestStatus(string? status)
+    {
+        CurrentRequestText.Text = status ?? "Idle";
+    }
+
+    private void AppendLog(string message)
+    {
+        _activityLog.Add($"{DateTime.Now:HH:mm:ss}  {message}");
+
+        while (_activityLog.Count > MaxLogEntries)
         {
-            return;
+            _activityLog.RemoveAt(0);
         }
 
-        var message = new ChatMessage
-        {
-            Sender = "Desktop",
-            Text = text,
-            Timestamp = DateTime.Now
-        };
+        ActivityLogScroll.ScrollToEnd();
+    }
 
-        // We do NOT add this message to the log here. Instead we wait for
-        // the server to broadcast it back to us via MessageReceived, so
-        // the message shows up exactly once, the same way it does for
-        // every other connected client.
-        await _socketClient.SendAsync(message);
+    private static void SetPill(Ellipse dot, System.Windows.Controls.TextBlock text, bool positive, string label)
+    {
+        text.Text = label;
 
-        MessageInput.Text = string.Empty;
+        var dotColor = positive ? Color.FromRgb(0x34, 0xC7, 0x59) : Color.FromRgb(0xFF, 0x3B, 0x30);
+        var textColor = positive ? Color.FromRgb(0x1A, 0x7F, 0x37) : Color.FromRgb(0xB3, 0x26, 0x1E);
+
+        dot.Fill = new SolidColorBrush(dotColor);
+        text.Foreground = new SolidColorBrush(textColor);
     }
 }
