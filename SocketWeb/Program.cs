@@ -1,8 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using SocketShared;
 using SocketWeb.Api;
 using SocketWeb.Data;
 using SocketWeb.Services;
@@ -19,6 +17,12 @@ builder.Services.AddRazorPages();
 // for the whole application, shared by every request, so it can keep
 // track of every open WebSocket connection in one place.
 builder.Services.AddSingleton<WebSocketConnectionManager>();
+
+// ChatSocketHandler is also a singleton - it tracks pending AI requests
+// across every connection for the app's whole lifetime. It reaches the
+// (scoped) database via IServiceScopeFactory instead of taking
+// IChatRepository directly - see the comment on the class itself.
+builder.Services.AddSingleton<ChatSocketHandler>();
 
 // SocketWeb is the only project that talks to MySQL - the connection
 // string comes from configuration (appsettings.json holds only a local
@@ -54,9 +58,20 @@ app.UseRouting();
 // requests. Without this line, the /ws endpoint below would not work.
 app.UseWebSockets();
 
+// A single WebSocket message larger than this is rejected and the
+// connection is closed - a reasonable upper bound so a buggy or malicious
+// client can't force the server to buffer unlimited memory for one
+// message (conversation history in an AiRequest is the largest realistic
+// payload, and this comfortably covers that for MaxPromptLength-sized
+// prompts).
+const int maxMessageBytes = 256 * 1024;
+
 // This is the raw WebSocket endpoint. Both the browser's JavaScript
-// WebSocket and the desktop app's ClientWebSocket connect here.
-app.Map("/ws", async (HttpContext context, WebSocketConnectionManager manager) =>
+// WebSocket and the desktop app's ClientWebSocket connect here. All the
+// actual routing/business logic (who this connection is, what to do with
+// each message) lives in ChatSocketHandler - this loop's only job is
+// framing: turn WebSocket frames into complete JSON messages.
+app.Map("/ws", async (HttpContext context, WebSocketConnectionManager manager, ChatSocketHandler handler) =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
     {
@@ -65,15 +80,39 @@ app.Map("/ws", async (HttpContext context, WebSocketConnectionManager manager) =
     }
 
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
-    var socketId = manager.AddSocket(socket);
+    var connectionId = manager.AddConnection(socket);
 
-    var buffer = new byte[1024 * 4];
+    var receiveBuffer = new byte[4 * 1024];
 
     try
     {
         while (socket.State == WebSocketState.Open)
         {
-            var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+            using var messageStream = new MemoryStream();
+            WebSocketReceiveResult result;
+            var tooLarge = false;
+
+            // A single logical message can arrive across multiple frames
+            // (multiple ReceiveAsync calls) - keep reading until
+            // EndOfMessage, accumulating into messageStream, unless it
+            // grows past the size cap first.
+            do
+            {
+                result = await socket.ReceiveAsync(new ArraySegment<byte>(receiveBuffer), context.RequestAborted);
+
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    break;
+                }
+
+                if (messageStream.Length + result.Count > maxMessageBytes)
+                {
+                    tooLarge = true;
+                    break;
+                }
+
+                messageStream.Write(receiveBuffer, 0, result.Count);
+            } while (!result.EndOfMessage);
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
@@ -81,24 +120,14 @@ app.Map("/ws", async (HttpContext context, WebSocketConnectionManager manager) =
                 break;
             }
 
-            // Read the JSON text that was sent to us and parse it into the
-            // shared ChatMessage model, so both the web page and the
-            // desktop app are guaranteed to be talking about the same shape.
-            // Fully qualified because SocketWeb.Data.ChatMessage (the
-            // database entity added for persistence) now also shares this
-            // project - this /ws handler still speaks the original flat
-            // protocol until it's migrated to the typed one in a later phase.
-            var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            var chatMessage = JsonSerializer.Deserialize<SocketShared.ChatMessage>(json);
-
-            if (chatMessage is not null)
+            if (tooLarge)
             {
-                // Re-serialize and immediately forward it to every connected
-                // client (the browser page and the desktop app), so they all
-                // see the new message, including the sender itself.
-                var outgoingJson = JsonSerializer.Serialize(chatMessage);
-                await manager.BroadcastAsync(outgoingJson);
+                await socket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too large", CancellationToken.None);
+                break;
             }
+
+            var json = Encoding.UTF8.GetString(messageStream.ToArray());
+            await handler.HandleMessageAsync(connectionId, json, context.RequestAborted);
         }
     }
     catch (WebSocketException)
@@ -106,9 +135,13 @@ app.Map("/ws", async (HttpContext context, WebSocketConnectionManager manager) =
         // Happens when a client disconnects abruptly (e.g. app closed).
         // Nothing special to do — we just clean up below.
     }
+    catch (OperationCanceledException)
+    {
+        // Server shutting down, or the underlying request was aborted.
+    }
     finally
     {
-        manager.RemoveSocket(socketId);
+        await manager.RemoveConnectionAsync(connectionId);
     }
 });
 

@@ -1,10 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+using Socket.Tests.TestInfrastructure;
 using SocketWeb.Api;
 using SocketWeb.Data;
 
@@ -14,11 +11,11 @@ namespace Socket.Tests.Api;
 // model binding, and JSON serialization end-to-end) but swaps the real
 // MySQL DbContext registration for the EF Core InMemory provider, so
 // these tests never need a live database.
-public class SessionEndpointsTests : IClassFixture<SessionEndpointsTests.TestWebApplicationFactory>
+public class SessionEndpointsTests : IClassFixture<InMemoryWebApplicationFactory>
 {
-    private readonly TestWebApplicationFactory _factory;
+    private readonly InMemoryWebApplicationFactory _factory;
 
-    public SessionEndpointsTests(TestWebApplicationFactory factory)
+    public SessionEndpointsTests(InMemoryWebApplicationFactory factory)
     {
         _factory = factory;
     }
@@ -167,28 +164,5 @@ public class SessionEndpointsTests : IClassFixture<SessionEndpointsTests.TestWeb
         var response = await client.PostAsJsonAsync("/api/sessions", new CreateSessionRequest(title));
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ChatSessionSummaryDto>())!;
-    }
-
-    // Swaps SocketWeb's real MySQL DbContext registration for an isolated
-    // in-memory one, so these tests never touch a real database and never
-    // interfere with each other.
-    public class TestWebApplicationFactory : WebApplicationFactory<Program>
-    {
-        private readonly string _databaseName = Guid.NewGuid().ToString();
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            // Program.cs reads ConnectionStrings:ChatDb at startup and
-            // throws if it's missing - this placeholder just satisfies
-            // that check; the DbContext registration below replaces the
-            // MySQL provider entirely before anything tries to use it.
-            builder.UseSetting("ConnectionStrings:ChatDb", "Server=unused;Database=unused;User=unused;Password=unused;");
-
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<DbContextOptions<ChatDbContext>>();
-                services.AddDbContext<ChatDbContext>(options => options.UseInMemoryDatabase(_databaseName));
-            });
-        }
     }
 }
