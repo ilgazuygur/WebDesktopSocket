@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using SocketShared;
+using SocketWeb.Api;
 using SocketWeb.Data;
 using SocketWeb.Services;
 
@@ -111,6 +112,16 @@ app.Map("/ws", async (HttpContext context, WebSocketConnectionManager manager) =
     }
 });
 
+// Plain HTTP CRUD for chat sessions/messages (create/list/load/rename/
+// delete) - a separate concern from the real-time /ws AI flow above.
+app.MapSessionEndpoints();
+
 app.MapRazorPages();
 
 app.Run();
+
+// Minimal API top-level Program.cs files get an internal Program class by
+// default, which Socket.Tests (an external test project) can't see. This
+// makes it public so Microsoft.AspNetCore.Mvc.Testing's
+// WebApplicationFactory<Program> can boot the app for endpoint tests.
+public partial class Program { }
