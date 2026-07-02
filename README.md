@@ -84,7 +84,75 @@ dotnet build
 ```
 
 This builds `SocketShared`, `SocketWeb`, and `SocketDesktop` together via
-`WebDesktopSocket.sln`.
+`WebDesktopSocket.sln`. (On macOS, `SocketDesktop` cannot build - see
+"macOS limitations" below.)
+
+## Running tests
+
+```
+dotnet test Socket.Tests
+```
+
+`Socket.Tests` covers the WebSocket protocol JSON, the AI HTTP client
+(against a stubbed handler, no real network/API calls), and the chat
+session/message repository (against the EF Core InMemory provider, no
+real MySQL needed). These all run on any OS, including macOS.
+
+## Database (MySQL)
+
+`SocketWeb` persists chat sessions and messages to MySQL via EF Core
+(Pomelo provider). Nothing else (not the browser, not `SocketDesktop`)
+talks to the database directly.
+
+### Option A: Docker Compose (recommended for local development)
+
+```
+cp .env.example .env
+# edit .env and set your own local passwords
+docker compose up -d
+```
+
+Then apply the schema (from the repository root):
+
+```
+dotnet tool restore
+export $(grep -v '^#' .env | xargs)   # loads ConnectionStrings__ChatDb, etc. into your shell
+dotnet dotnet-ef database update --project SocketWeb --startup-project SocketWeb
+```
+
+### Option B: A MySQL server you already have
+
+1. Create a database and a user for it, e.g. in the `mysql` client:
+
+   ```sql
+   CREATE DATABASE webdesktopsocket;
+   CREATE USER 'webdesktopsocket_app'@'%' IDENTIFIED BY 'your-own-password';
+   GRANT ALL PRIVILEGES ON webdesktopsocket.* TO 'webdesktopsocket_app'@'%';
+   ```
+
+2. Point `SocketWeb` at it. `appsettings.json` only contains a local-dev
+   placeholder connection string - override it with an environment
+   variable instead of editing that file:
+
+   ```
+   export ConnectionStrings__ChatDb="Server=127.0.0.1;Port=3306;Database=webdesktopsocket;User=webdesktopsocket_app;Password=your-own-password;"
+   ```
+
+3. Apply the schema:
+
+   ```
+   dotnet tool restore
+   dotnet dotnet-ef database update --project SocketWeb --startup-project SocketWeb
+   ```
+
+The app never runs migrations automatically on startup - `dotnet ef
+database update` (or a CI/deploy step that does the same) is always a
+deliberate, separate step.
+
+**Never commit real database credentials.** `.env` and
+`appsettings.*.local.json` are gitignored; only `.env.example` (with
+placeholder values) is committed. See `.env.example` for the full list of
+variables.
 
 ## Fixed configuration
 
@@ -94,6 +162,9 @@ This builds `SocketShared`, `SocketWeb`, and `SocketDesktop` together via
 Both are hardcoded (in `SocketWeb/Program.cs`, `SocketWeb/wwwroot/js/socket-client.js`,
 and `SocketDesktop/Services/SocketClientService.cs`) to keep the demo simple -
 no configuration files to edit before it works.
+
+The MySQL connection string is the one thing that **is** configurable -
+see "Database (MySQL)" above.
 
 ## Troubleshooting
 
