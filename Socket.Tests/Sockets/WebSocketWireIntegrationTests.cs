@@ -1,6 +1,4 @@
 using System.Net.WebSockets;
-using System.Text;
-using System.Text.Json;
 using Socket.Tests.TestInfrastructure;
 using SocketShared.Protocol;
 
@@ -25,19 +23,16 @@ public class WebSocketWireIntegrationTests : IClassFixture<InMemoryWebApplicatio
     {
         using var socket = await ConnectAsync();
 
-        await SendTextAsync(socket, "{ this is not valid json at all");
+        await WebSocketTestHelpers.SendTextAsync(socket, "{ this is not valid json at all");
 
-        var errorJson = await ReceiveTextAsync(socket);
-        var error = JsonSerializer.Deserialize<SocketMessage>(errorJson)!;
+        var error = await WebSocketTestHelpers.ReceiveMessageAsync(socket);
         Assert.Equal(MessageType.Error, error.Type);
 
         // The connection must still be usable afterwards - prove it by
         // completing a normal ClientHello/HelloAck round trip.
-        var hello = new SocketMessage { Type = MessageType.ClientHello, Role = ClientRole.Browser };
-        await SendTextAsync(socket, JsonSerializer.Serialize(hello));
+        await WebSocketTestHelpers.SendMessageAsync(socket, new SocketMessage { Type = MessageType.ClientHello, Role = ClientRole.Browser });
 
-        var ackJson = await ReceiveTextAsync(socket);
-        var ack = JsonSerializer.Deserialize<SocketMessage>(ackJson)!;
+        var ack = await WebSocketTestHelpers.ReceiveMessageAsync(socket);
         Assert.Equal(MessageType.HelloAck, ack.Type);
     }
 
@@ -48,7 +43,7 @@ public class WebSocketWireIntegrationTests : IClassFixture<InMemoryWebApplicatio
 
         // Comfortably larger than the server's 256 KB per-message cap.
         var oversized = new string('a', 300 * 1024);
-        await SendTextAsync(socket, oversized);
+        await WebSocketTestHelpers.SendTextAsync(socket, oversized);
 
         var buffer = new byte[4096];
         var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
@@ -63,18 +58,5 @@ public class WebSocketWireIntegrationTests : IClassFixture<InMemoryWebApplicatio
         var httpUri = _factory.Server.BaseAddress;
         var wsUri = new UriBuilder(httpUri) { Scheme = "ws", Path = "/ws" }.Uri;
         return await wsClient.ConnectAsync(wsUri, CancellationToken.None);
-    }
-
-    private static Task SendTextAsync(WebSocket socket, string text)
-    {
-        var bytes = Encoding.UTF8.GetBytes(text);
-        return socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None);
-    }
-
-    private static async Task<string> ReceiveTextAsync(WebSocket socket)
-    {
-        var buffer = new byte[8192];
-        var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-        return Encoding.UTF8.GetString(buffer, 0, result.Count);
     }
 }
