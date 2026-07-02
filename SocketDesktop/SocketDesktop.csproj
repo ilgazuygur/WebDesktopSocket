@@ -6,10 +6,28 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+
+    <!-- Lets `dotnet build` succeed on non-Windows machines (e.g. macOS)
+         even though this is a net8.0-windows/WPF project - it only
+         affects compiling, not running. WPF still cannot actually run
+         outside Windows; see README.md for what "cross-build" means in
+         practice and the Windows runtime checklist. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\SocketShared\SocketShared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

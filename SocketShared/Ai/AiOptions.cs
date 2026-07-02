@@ -19,4 +19,14 @@ public class AiOptions
 
     // Sent as "Authorization: Bearer {ApiKey}". Never log this value.
     public string ApiKey { get; set; } = string.Empty;
+
+    // True once every value needed to actually attempt an AI call is
+    // present. Callers check this before using an IAiClient built from
+    // these options, so a missing/incomplete configuration fails with a
+    // clear, specific status instead of a confusing HTTP error partway
+    // through a request.
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(BaseUrl) &&
+        !string.IsNullOrWhiteSpace(Model) &&
+        !string.IsNullOrWhiteSpace(ApiKey);
 }

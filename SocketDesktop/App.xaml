@@ -1,7 +1,10 @@
 <Application x:Class="SocketDesktop.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             StartupUri="MainWindow.xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- No StartupUri here - App.xaml.cs resolves MainWindow through the
+         dependency injection container instead (see OnStartup), so it can
+         be constructed with its dependencies (DesktopSocketClient,
+         AiOptions) like everything else. -->
     <Application.Resources>
     </Application.Resources>
 </Application>

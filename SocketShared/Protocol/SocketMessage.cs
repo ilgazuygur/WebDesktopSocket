@@ -1,11 +1,10 @@
 namespace SocketShared.Protocol;
 
 // The one envelope every WebSocket message uses. Both SocketWeb and
-// SocketDesktop serialize/deserialize this exact class, the same way
-// SocketShared.ChatMessage worked for the original demo - except this
-// shape carries enough information (Type, SessionId, RequestId, Role)
-// for the server to route messages correctly instead of just
-// broadcasting everything to everyone.
+// SocketDesktop serialize/deserialize this exact class - it carries
+// enough information (Type, SessionId, RequestId, Role) for the server
+// to route messages correctly instead of just broadcasting everything to
+// everyone, the way the original demo's flat ChatMessage model did.
 //
 // Not every field is used by every message Type - see the comments on
 // MessageType for which fields matter for which message.
