@@ -6,6 +6,27 @@ time over a **raw WebSocket connection** (no SignalR) - and, on top of
 that, the desktop app acting as a secure bridge to an external AI API, so
 the browser never needs (or gets) the AI provider's API key.
 
+## Main features
+
+- **ChatGPT-style chat sessions**: create a new chat, list previous chats
+  in a sidebar, open an old chat and continue it (with full AI context),
+  rename a chat, delete a chat (with confirmation), and automatic titles
+  from the first message. Messages from different sessions never mix.
+- **Real-time AI replies over raw WebSockets** - no SignalR, no polling.
+- **The AI API key never reaches the browser**: the browser sends prompts
+  to the server over WebSocket; the server routes them to the desktop app;
+  only the desktop app calls the AI API (over HTTPS) with the key.
+- **Provider-agnostic AI**: any OpenAI-compatible endpoint works by
+  changing configuration - no code change.
+- **Persistent history in MySQL** via Entity Framework Core, with a clean
+  REST CRUD API (`/api/sessions`) separate from the real-time layer.
+- **Robust routing and error handling**: correlated request/response IDs,
+  exactly-once message saving, duplicate-message protection, desktop
+  online/offline status, clear errors for offline/timeout/auth failures,
+  browser auto-reconnect, and safe handling of refreshes and multiple tabs.
+- **Polished, responsive web UI** in plain HTML/CSS/JS (no framework), with
+  XSS-safe message rendering.
+
 ## For an internship supervisor: what this project demonstrates
 
 - **Full-stack real-time architecture**: a browser, a web server, and a
@@ -97,6 +118,65 @@ Three .NET 8 projects, plus a test project:
 
 The **browser never talks to the AI API directly, and never receives the
 API key** - it only ever talks to `SocketWeb`.
+
+## Why raw WebSockets (not SignalR)?
+
+A WebSocket is a long-lived, two-way connection between a client and a
+server: unlike a normal HTTP request (which finishes as soon as the
+response comes back), it stays open so either side can send a message at
+any time. This project uses the raw `System.Net.WebSockets` API directly
+on both ends rather than a library like SignalR, on purpose - it keeps
+every step visible (the handshake, sending JSON, the manual receive loop,
+reconnection, framing), which is exactly what makes it a good learning
+project. SignalR would do all of that invisibly. See
+[LEARNING_NOTES.md](LEARNING_NOTES.md) for a beginner-level walkthrough.
+
+## Technologies used
+
+- **.NET 8** / **C#** - all three projects target `net8.0`
+  (`SocketDesktop` targets `net8.0-windows` for WPF).
+- **ASP.NET Core** (Razor Pages + minimal APIs) - the web server, REST API.
+- **Raw WebSockets** (`System.Net.WebSockets`) - real-time transport, no SignalR.
+- **WPF** - the desktop client (`SocketDesktop`).
+- **Entity Framework Core 8** with **Pomelo.EntityFrameworkCore.MySql** - persistence.
+- **MySQL 8** - the database.
+- **Microsoft.Extensions.Hosting / .Http** - dependency injection,
+  configuration, and `IHttpClientFactory` in the desktop app.
+- **Vanilla HTML / CSS / JavaScript** - the web UI (no React/Vue/paid libs).
+- **xUnit** + **Microsoft.AspNetCore.Mvc.Testing** + **EF Core InMemory** - tests.
+
+## Project folder structure
+
+```
+WebDesktopSocket/
+├─ WebDesktopSocket.sln
+├─ docker-compose.yml            # local MySQL for development
+├─ .env.example                  # placeholder env vars (copy to .env)
+├─ .config/dotnet-tools.json     # pinned local dotnet-ef tool
+├─ README.md  LEARNING_NOTES.md  LICENSE
+│
+├─ SocketShared/                 # shared contract, referenced by both apps
+│  ├─ Protocol/                  # SocketMessage, MessageType, ClientRole, ConversationTurn, SocketStatusCodes
+│  └─ Ai/                        # IAiClient, OpenAiCompatibleClient, AiOptions, exceptions
+│
+├─ SocketWeb/                    # ASP.NET Core server (web UI + /ws + REST + MySQL)
+│  ├─ Program.cs                 # DI, /ws framing loop, endpoint wiring
+│  ├─ Services/                  # WebSocketConnectionManager, ChatSocketHandler, ConnectionInfo
+│  ├─ Data/                      # ChatDbContext, entities, ChatRepository, SessionTitleGenerator
+│  ├─ Api/                       # SessionEndpoints (/api/sessions), DTOs
+│  ├─ Migrations/                # EF Core InitialCreate migration
+│  ├─ Pages/                     # Index.cshtml (chat page shell)
+│  └─ wwwroot/                   # css/site.css, js/{api,ws,chat}.js
+│
+├─ SocketDesktop/                # WPF desktop AI bridge (Windows-only runtime)
+│  ├─ App.xaml(.cs)              # generic Host + DI bootstrap
+│  ├─ MainWindow.xaml(.cs)       # operational dashboard
+│  ├─ Services/DesktopSocketClient.cs   # the only caller of IAiClient
+│  └─ appsettings.json           # non-secret Ai:BaseUrl / Ai:Model placeholders
+│
+└─ Socket.Tests/                 # xUnit tests (run on any OS)
+   ├─ Protocol/  Ai/  Data/  Api/  Sockets/  TestInfrastructure/
+```
 
 ## Session storage (MySQL) and CRUD
 
@@ -429,6 +509,45 @@ Windows normally. To verify the one part that needs it:
 - **Firewall prompt on first run (Windows)**: allow it - it's just
   Windows asking permission for Kestrel (the web server) to listen on a
   local port.
+
+## Security notes
+
+- **The AI API key never leaves `SocketDesktop`.** It's read only from the
+  `AI_API_KEY` environment variable, is never written to any committed
+  file, never sent to `SocketWeb` or the browser, and is never logged or
+  included in an exception message. The desktop dashboard shows only
+  "Configured" / "Missing", never the value.
+- **No secrets are committed.** `appsettings.json` files contain only
+  `CHANGE_ME`/placeholder values; real credentials come from environment
+  variables (`ConnectionStrings__ChatDb`, `AI_API_KEY`) or `.env` (which is
+  gitignored). Only `.env.example` (placeholders) is committed.
+- **Message content is never rendered as HTML.** The browser sets message
+  text via `textContent`, never `innerHTML`, so anything a user or the AI
+  sends - including something that looks like `<script>` - is shown as
+  inert text. Line breaks are preserved with CSS, not by building HTML.
+- **Server-generated identity.** The server assigns every connection its
+  own id; a client-supplied connection id is never trusted for routing.
+- **Input is validated** (empty/oversized prompts rejected, a maximum
+  WebSocket message size enforced) and **internal error details are never
+  forwarded to the browser** - only short, safe messages.
+- **Not included** (out of scope for a learning project): user
+  authentication, TLS on the local `ws://` link (the AI call itself is
+  HTTPS), and rate limiting. See "Known limitations".
+
+## Known limitations
+
+- **WPF runs on Windows only.** `SocketDesktop` cross-builds (compiles) on
+  macOS/Linux but cannot run there. See the Windows checklist.
+- **No authentication** - anyone who can reach `localhost:5080` can use any
+  session. Fine for a single-user local demo; a real deployment needs auth.
+- **Plain `ws://`** between browser/desktop and `SocketWeb` (no `wss://`) -
+  avoids dev-certificate setup. The call to the *AI API* itself is HTTPS.
+- **Full conversation history is sent to the AI every request**, with no
+  truncation - a very long chat could hit a provider's context limit.
+- **"Most-recently-registered desktop wins"** - if two `SocketDesktop`
+  instances connect, only the newest receives `AiRequest`s (no queueing).
+- The in-memory `RequestId` tracking dictionaries are never trimmed - fine
+  for a single long-running session, not for an unbounded-lifetime service.
 
 ## Important files
 

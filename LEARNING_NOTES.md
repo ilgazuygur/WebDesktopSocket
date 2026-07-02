@@ -3,6 +3,33 @@
 This document explains *how* this project works, for anyone learning
 WebSockets, ASP.NET Core, EF Core, or WPF for the first time.
 
+## Sockets and WebSockets, from scratch
+
+**What is a socket?** A socket is one end of a two-way communication link
+between two programs over a network. Think of it like a telephone: once
+both ends "pick up", either side can talk, and the line stays open until
+someone hangs up. This is different from a plain website request, where
+your browser asks for a page, gets it, and the conversation is over.
+
+**What is a WebSocket?** Normal web traffic (HTTP) is request/response:
+the browser asks, the server answers, done. That's awkward for a chat app,
+because the server often needs to *push* something to the browser when the
+browser didn't ask for anything (e.g. "the AI just replied"). A WebSocket
+solves this: it starts as a normal HTTP request, then "upgrades" into a
+persistent, two-way connection that stays open. After the upgrade, either
+side can send a message to the other at any time, instantly - no polling,
+no re-connecting per message.
+
+**Why raw WebSockets here?** .NET and browsers both have built-in
+WebSocket support (`System.Net.WebSockets` on the server/desktop, the
+`WebSocket` class in the browser). There are also higher-level libraries -
+most famously **SignalR** - that wrap WebSockets and add features like
+automatic reconnection and a nicer API. This project deliberately uses the
+**raw** WebSocket APIs on all three sides instead, because the whole point
+is to *learn* the mechanics: the handshake, sending JSON by hand, reading
+it back in a receive loop, reconnecting, and framing messages. SignalR
+would hide exactly the parts worth understanding.
+
 ## The big picture
 
 There is only **one** WebSocket server in this whole system: `SocketWeb`.
@@ -80,6 +107,38 @@ JSON looks the same, it doesn't matter which language produced it.
 the server knows which browser to route an eventual `AiResponse` back to,
 and it's the *idempotency key* that guarantees a message never gets saved
 twice even if it's somehow delivered twice.
+
+### The message types (what each one means)
+
+`MessageType` (in `SocketShared/Protocol/MessageType.cs`) is the "verb" of
+every message. Here's each one, and who sends it to whom:
+
+- **`ClientHello`** (client -> server): the very first message a client
+  sends after connecting, saying which kind of client it is
+  (`Role = Browser` or `Role = Desktop`). Until this arrives, the server
+  won't process anything else from that connection.
+- **`HelloAck`** (server -> client): the server's reply to `ClientHello`,
+  confirming registration and echoing back the server-assigned
+  `ConnectionId`.
+- **`UserPrompt`** (browser -> server): "the user typed this" - carries
+  the `SessionId`, a fresh `RequestId`, and the prompt `Content`.
+- **`AiRequest`** (server -> desktop): "please ask the AI this" - the same
+  `SessionId`/`RequestId`, plus the conversation `History` so the AI has
+  context. Sent to the desktop client *only*, never broadcast.
+- **`AiResponse`** (desktop -> server -> browser): the AI's answer,
+  carrying the same `RequestId` so the server can route it back to exactly
+  the browser that asked.
+- **`Status`** (server -> browser): a state update, e.g. `thinking`
+  ("AI is working on it") or `desktop-online` / `desktop-offline`.
+- **`Error`** (any direction): something went wrong - carries a short,
+  safe `Error` message and (when relevant) the `RequestId` it relates to.
+
+**`SessionId` vs `RequestId`** - two different jobs:
+- `SessionId` identifies *which conversation* a message belongs to. It
+  lives for the whole life of a chat, across many messages.
+- `RequestId` identifies *one single prompt-and-answer round trip*. A new
+  one is generated for every prompt, and it's what ties a `UserPrompt` to
+  its eventual `AiResponse` (or `Error`).
 
 ### The AI client abstraction
 
@@ -182,6 +241,33 @@ goes through `IChatRepository`.
 it inside the same method that saves the message avoids any dependency on
 clock precision.
 
+### What is Entity Framework Core, and what are migrations?
+
+**Entity Framework Core (EF Core)** is an ORM - "object-relational
+mapper". Instead of writing SQL by hand, you write C# classes
+(`ChatSession`, `ChatMessage`), and EF Core translates your C# LINQ
+queries (`_db.ChatSessions.OrderByDescending(...)`) into SQL and maps the
+rows back into objects. `ChatDbContext` is the central object that
+represents "a session with the database".
+
+**Migrations** solve a follow-up problem: your C# classes describe what
+the tables *should* look like, but the real MySQL database needs those
+tables to actually exist. A migration is a generated, version-controlled
+recipe for changing the database schema to match your classes. This
+project has one, `InitialCreate` (in `SocketWeb/Migrations/`), which
+creates the two tables. You generate a migration with `dotnet ef
+migrations add <Name>` and apply it to a real database with `dotnet ef
+database update` (see README.md). Applying migrations is always a
+deliberate, separate step here - the app never quietly changes the
+database schema on startup.
+
+One useful detail: the migration was generated against a *pinned* MySQL
+version (`new MySqlServerVersion(...)` in `Program.cs`) rather than
+`ServerVersion.AutoDetect()`, so generating and applying migrations
+doesn't require a live database connection just to ask MySQL what version
+it is - which is exactly why the whole DB layer could be developed and
+tested on a machine with no MySQL running.
+
 ### The REST API (`/api/sessions`)
 
 `SocketWeb/Api/SessionEndpoints.cs` is plain ASP.NET Core minimal API
@@ -266,16 +352,62 @@ status, AI configuration status (explicitly never the key itself - only
 "Configured" or "Missing"), what request (if any) is being processed
 right now, and a short activity log.
 
-## Why raw WebSockets instead of SignalR?
+## Cross-cutting concepts used throughout
 
-SignalR is great for production apps (it adds automatic reconnection,
-fallback transports, and a nicer RPC-style API), but it hides exactly the
-mechanics this project is meant to teach: the WebSocket handshake, sending
-raw JSON, and reading it back with a manual receive loop. Using
-`System.Net.WebSockets` directly on both ends makes every step visible -
-including the parts (per-connection send locks, manual reconnect,
-message framing) that a library like SignalR would otherwise do for you
-invisibly.
+### Dependency injection (DI)
+
+Rather than each class creating the objects it depends on (e.g.
+`ChatSocketHandler` doing `new ChatRepository(new ChatDbContext(...))`),
+those objects are *registered* once in a container (`builder.Services.Add...`
+in `SocketWeb/Program.cs`, `services.Add...` in `SocketDesktop/App.xaml.cs`)
+and *requested* through constructors. The container decides how to build
+each one and how long it lives (a **singleton** lives for the whole app; a
+**scoped** service, like `ChatDbContext`, lives for one unit of work). This
+keeps classes focused on their own job, makes their dependencies explicit,
+and - importantly for this project - makes them easy to test by handing in
+a fake or in-memory version instead of the real thing.
+
+### async / await and CancellationToken
+
+Almost every operation here waits on something external - a WebSocket
+frame, a database query, an HTTP call to the AI. Doing that *synchronously*
+would block a thread the whole time it's waiting. Instead, methods are
+`async` and `await` those operations, which frees the thread to do other
+work until the result is ready. That's why nearly every method returns a
+`Task` and takes a `CancellationToken`.
+
+A **`CancellationToken`** is a "stop signal" passed down through a chain of
+async calls. When something should be abandoned - the AI is taking too
+long, the server is shutting down, the web request was aborted - the token
+is cancelled, and every awaited operation that received it stops promptly
+instead of running to completion pointlessly. For example,
+`DesktopSocketClient` gives each AI call a token that trips after 60
+seconds, so a hung request turns into a clean timeout `Error` to the
+browser rather than a browser that waits forever.
+
+Related: **`IAsyncDisposable`/`IDisposable`**. Things that hold resources
+(WebSocket connections, semaphores, the desktop's `IHost`) implement a
+dispose method so those resources are released deterministically - e.g.
+closing `SocketDesktop` disposes its host, which closes its WebSocket.
+
+### Error handling
+
+The guiding rule is: *one bad message must never crash the connection or
+the server, and internal details must never leak to the browser.* Concretely:
+
+- Invalid JSON is caught and answered with a clean `Error` message; the
+  connection stays open and usable.
+- Each AI failure mode is a distinct exception (`AiAuthenticationException`,
+  `AiTimeoutException`, `AiRequestException`, `AiInvalidResponseException`),
+  so the desktop can translate each into a specific, *safe* `Error` string
+  - never the raw exception text (which could contain internal paths or
+  connection details).
+- A failed request never saves an assistant message, and never leaves the
+  request stuck "pending" - so the user can simply try again.
+- The browser side degrades gracefully: it shows a clear error banner,
+  re-enables the composer (keeping the typed text), and - because every
+  answer is persisted server-side regardless - can always recover the
+  conversation by reloading it from the REST API.
 
 ## How the tests avoid needing Windows, MySQL, or a real AI API
 
@@ -323,3 +455,44 @@ invisibly.
   both `SocketWeb` and `SocketDesktop`) are never trimmed - fine for a
   single long-running session, but a true production service would want
   to expire old entries.
+
+## macOS vs Windows: what runs where
+
+This project was developed mainly on macOS, and it's worth being precise
+about what that means, because WPF is Windows-only:
+
+- **`SocketShared`, `SocketWeb`, `Socket.Tests`** are fully
+  cross-platform - they build and run on macOS, Linux, or Windows. All the
+  server logic, the REST API, the persistence layer, and every automated
+  test run anywhere.
+- **`SocketDesktop`** targets `net8.0-windows` and uses WPF. With
+  `<EnableWindowsTargeting>true</EnableWindowsTargeting>` it will
+  **compile** ("cross-build") on macOS/Linux, which is useful for catching
+  compile errors - but WPF's actual runtime only exists on Windows, so the
+  desktop app can only be *run* on Windows. This project is honest about
+  that: the WPF UI was never claimed to be runtime-tested on macOS, and
+  README.md has a Windows checklist for verifying it.
+
+## How to explain this project to an internship supervisor
+
+A 30-second version: *"It's an AI chat app. The browser talks to a web
+server over a raw WebSocket - not SignalR - and the web server forwards AI
+requests to a desktop app, which is the only piece that actually calls the
+AI API. That indirection exists on purpose: the AI API key lives only in
+the desktop app and never reaches the browser, where anyone could read it.
+Chat history is stored in MySQL through Entity Framework Core, with a REST
+API for managing sessions. It's fully tested - protocol, routing,
+persistence, and a full browser-to-AI round trip - all without needing a
+real Windows machine or a real AI account."*
+
+If they want more depth, the things worth pointing at are:
+- **The security boundary**: why the desktop app is in the loop at all
+  (keeping the API key out of the browser).
+- **The routed protocol**: `SessionId`/`RequestId` correlation, and how
+  duplicate messages are prevented (the `RequestId` idempotency key).
+- **The clean separation**: real-time AI over WebSockets vs. plain database
+  CRUD over REST; and the `IAiClient` abstraction that makes the AI
+  provider a config choice.
+- **The engineering honesty**: exactly what was verified on macOS, what was
+  verified through tests/fakes, and what still needs Windows - with a
+  checklist rather than a hand-wave.
