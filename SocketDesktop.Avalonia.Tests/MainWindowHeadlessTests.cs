@@ -23,17 +23,27 @@ public class MainWindowHeadlessTests
         Ai = new AiOptions { BaseUrl = "https://api.example.test/v1", Model = "headless-model", ApiKey = "key" }
     };
 
+    // Evaluates `condition` at most once per loop iteration and returns the
+    // instant it's true, rather than checking once in a loop guard and then
+    // re-checking again afterward - two separate calls a few instructions
+    // apart could observe different results for a condition backed by
+    // mutable state written from another thread (no synchronization),
+    // turning a real success into a spurious "timeout".
     private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 10000)
     {
         var start = DateTime.UtcNow;
-        while (!condition() && (DateTime.UtcNow - start).TotalMilliseconds < timeoutMs)
+        while (true)
         {
+            if (condition())
+            {
+                return;
+            }
+            if ((DateTime.UtcNow - start).TotalMilliseconds >= timeoutMs)
+            {
+                throw new TimeoutException("Condition not met within timeout.");
+            }
             await Task.Delay(10);
             Dispatcher.UIThread.RunJobs();
-        }
-        if (!condition())
-        {
-            throw new TimeoutException("Condition not met within timeout.");
         }
     }
 

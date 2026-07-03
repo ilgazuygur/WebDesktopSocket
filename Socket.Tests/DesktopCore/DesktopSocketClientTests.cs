@@ -21,16 +21,26 @@ public class DesktopSocketClientTests
             : new AiOptions()
     };
 
+    // Evaluates `condition` at most once per loop iteration and returns the
+    // instant it's true, rather than checking once in a loop guard and then
+    // re-checking again afterward - two separate calls a few instructions
+    // apart could observe different results for a condition backed by
+    // mutable state written from another thread (no synchronization),
+    // turning a real success into a spurious "timeout".
     private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 10000)
     {
         var sw = Stopwatch.StartNew();
-        while (!condition() && sw.ElapsedMilliseconds < timeoutMs)
+        while (true)
         {
+            if (condition())
+            {
+                return;
+            }
+            if (sw.ElapsedMilliseconds >= timeoutMs)
+            {
+                throw new TimeoutException("Condition not met within timeout.");
+            }
             await Task.Delay(10);
-        }
-        if (!condition())
-        {
-            throw new TimeoutException("Condition not met within timeout.");
         }
     }
 
