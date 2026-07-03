@@ -1,0 +1,70 @@
+name: CI
+
+# Build, test and publish on both macOS and Windows. Every test uses the
+# in-memory database and the local MockAiServer, so CI never needs a real
+# AI key or any paid/external service.
+on:
+  push:
+    branches: [ main, "feature/**" ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-publish:
+    name: Build, test & publish (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ macos-latest, windows-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore WebDesktopSocket.sln
+
+      # Builds the whole solution. On Windows this builds the WPF
+      # SocketDesktop natively; on macOS it cross-builds it
+      # (EnableWindowsTargeting) - it is never *run* on macOS.
+      - name: Build (Release)
+        run: dotnet build WebDesktopSocket.sln -c Release --no-restore
+
+      # Runs the full suite, including the Avalonia headless UI tests in
+      # SocketDesktop.Avalonia.Tests. No secrets, no network to a real AI.
+      - name: Test (incl. Avalonia headless UI tests)
+        run: dotnet test WebDesktopSocket.sln -c Release --no-build --verbosity normal
+
+      # --- Publish the cross-platform Avalonia client (self-contained) ---
+      - name: Publish Avalonia (osx-arm64)
+        if: runner.os == 'macOS'
+        run: dotnet publish SocketDesktop.Avalonia -c Release -r osx-arm64 --self-contained -o artifacts/avalonia-osx-arm64
+
+      - name: Publish Avalonia (osx-x64)
+        if: runner.os == 'macOS'
+        run: dotnet publish SocketDesktop.Avalonia -c Release -r osx-x64 --self-contained -o artifacts/avalonia-osx-x64
+
+      - name: Publish Avalonia (win-x64)
+        if: runner.os == 'Windows'
+        run: dotnet publish SocketDesktop.Avalonia -c Release -r win-x64 --self-contained -o artifacts/avalonia-win-x64
+
+      # --- Build the legacy WPF client (Windows only - never run on macOS) ---
+      - name: Build legacy WPF SocketDesktop (Windows only)
+        if: runner.os == 'Windows'
+        run: dotnet build SocketDesktop/SocketDesktop.csproj -c Release
+
+      - name: Upload publish artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: socketdesktop-avalonia-${{ matrix.os }}
+          path: artifacts/
+          if-no-files-found: error
