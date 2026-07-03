@@ -6,14 +6,12 @@ real time over a **raw WebSocket connection** (no SignalR) - and, on top
 of that, the desktop app acting as a secure bridge to an external AI API,
 so the browser never needs (or gets) the AI provider's API key.
 
-The desktop bridge ships in two forms sharing one UI-independent core
-(`SocketDesktop.Core`):
+The desktop client is built on a UI-independent core (`SocketDesktop.Core`)
+with a single cross-platform Avalonia UI on top:
 
-- **`SocketDesktop.Avalonia`** - the cross-platform client. Runs natively
-  on **macOS and Windows** (and Linux). This is the recommended client and
-  the one used for the local end-to-end verification below.
-- **`SocketDesktop`** - the original **Windows-only** WPF client, kept and
-  adapted to reuse the same shared core, so nothing was lost in the move.
+- **`SocketDesktop.Avalonia`** - the desktop client. Runs natively on
+  **macOS and Windows** (and Linux). It is the only desktop application in
+  the repository and the one used for the local end-to-end verification below.
 
 > **Verified locally on macOS (Apple Silicon):** the whole stack was run
 > natively end to end - real MySQL (Docker), `SocketWeb`, the deterministic
@@ -21,9 +19,9 @@ The desktop bridge ships in two forms sharing one UI-independent core
 > and driven through a real browser, with every message checked for
 > exactly-once persistence in MySQL. See
 > [macOS setup](#macos-setup-what-was-actually-verified-here). The Windows
-> WPF build is verified by CI (compile + publish) and Windows CI runs of
-> the Avalonia client, but its GUI was not physically clicked on a Windows
-> machine - the README is explicit about that distinction throughout.
+> build is verified by CI (build + publish + headless UI tests), but its
+> GUI was not physically clicked on a Windows machine - the README is
+> explicit about that distinction throughout.
 
 ## Main features
 
@@ -46,7 +44,7 @@ The desktop bridge ships in two forms sharing one UI-independent core
 - **Polished, responsive web UI** in plain HTML/CSS/JS (no framework), with
   XSS-safe message rendering.
 
-## For an internship supervisor: what this project demonstrates
+## What this project demonstrates
 
 - **Full-stack real-time architecture**: a browser, a web server, and a
   native desktop app coordinating over raw WebSockets, with the desktop
@@ -69,9 +67,9 @@ The desktop bridge ships in two forms sharing one UI-independent core
   **Avalonia headless UI tests** - plus a fake-desktop integration test
   and a real `OpenAiCompatibleClient`↔`MockAiServer` test that exercise the
   full round trip without a real Windows machine or a real AI API call.
-- **A shared, UI-independent core** (`SocketDesktop.Core`) with two UIs on
-  top of it (cross-platform Avalonia + legacy WPF), showing separation of
-  concerns and cross-platform .NET.
+- **A UI-independent core** (`SocketDesktop.Core`) with a thin
+  cross-platform Avalonia UI on top, showing separation of concerns and
+  cross-platform .NET.
 - **Honesty about platform limits**: this was built and verified natively
   on macOS, and the README says exactly what was and wasn't verified there
   vs. only on the Windows CI runner.
@@ -93,16 +91,13 @@ The desktop bridge ships in two forms sharing one UI-independent core
   desktop bridge logic: WebSocket connection lifecycle, desktop
   registration, `AiRequest` handling (the **only** caller of `IAiClient`),
   bounded-exponential-backoff reconnect, cancellation/shutdown, and
-  configuration loading/validation. **No WPF or Avalonia dependency** -
-  it's pure .NET, so both desktop UIs use it unchanged and it's fully
-  unit-testable against a fake WebSocket.
-- **SocketDesktop.Avalonia** - cross-platform desktop app (macOS, Windows,
-  Linux). A thin MVVM shell over `SocketDesktop.Core`: an operational
-  dashboard (connection/registration/AI-config status, activity log,
-  connect/disconnect/reconnect). **This is the recommended client.**
-- **SocketDesktop** - the original **Windows-only** WPF app, adapted to
-  reuse `SocketDesktop.Core` instead of its own copy of the logic. Kept so
-  the move to cross-platform lost nothing.
+  configuration loading/validation. **No Avalonia (or other UI)
+  dependency** - it's pure .NET, so the UI layers on top unchanged and it's
+  fully unit-testable against a fake WebSocket.
+- **SocketDesktop.Avalonia** - the cross-platform desktop app (macOS,
+  Windows, Linux). A thin MVVM shell over `SocketDesktop.Core`: an
+  operational dashboard (connection/registration/AI-config status, activity
+  log, connect/disconnect/reconnect). **This is the only desktop UI.**
 - **MockAiServer** - a small deterministic, OpenAI-compatible HTTP server
   used only for testing/local runs. It returns a fixed, recognizable reply
   and ignores the API key, so end-to-end runs need no real provider or key.
@@ -114,7 +109,7 @@ The desktop bridge ships in two forms sharing one UI-independent core
   build the real `MainWindow`/view model and assert bindings and command
   wiring, without a display.
 
-Whichever desktop client runs, the flow is identical:
+The flow is:
 
 ```
                     REST  /api/sessions (CRUD)
@@ -129,10 +124,9 @@ Whichever desktop client runs, the flow is identical:
                                                       ClientRole.Desktop
                                                                │
                                         ┌──────────────────────▼───────────────────┐   AI API
-                                        │  SocketDesktop.Avalonia  (macOS/Windows)  │  HTTPS
-                                        │      or  SocketDesktop   (Windows/WPF)     │  (OpenAI-
-                                        │  ── both are thin shells over ──           │──► compat.)
-                                        │        SocketDesktop.Core                   │
+                                        │  SocketDesktop.Avalonia (macOS/Windows)   │  HTTPS
+                                        │  ── a thin shell over ──                   │  (OpenAI-
+                                        │        SocketDesktop.Core                   │──► compat.)
                                         │   • DesktopSocketClient  • IAiClient        │
                                         └────────────────────────────────────────────┘
 ```
@@ -143,13 +137,14 @@ process, which is the only place the API key lives.
 
 ## The desktop app: why Avalonia, and how the code is split
 
-**Why Avalonia was added.** The original desktop client was WPF, which
-only runs on Windows. To make the AI bridge usable on the machine this was
-actually developed on (macOS) - without throwing the WPF app away - the
-desktop logic was extracted into a plain .NET library and given a second,
-cross-platform UI built with [Avalonia](https://avaloniaui.net/). Avalonia
-is a XAML/MVVM UI framework whose runtime works on macOS, Windows and
-Linux, so the same desktop bridge now runs natively wherever .NET does.
+**Why Avalonia.** [Avalonia](https://avaloniaui.net/) is a XAML/MVVM UI
+framework whose runtime works on macOS, Windows and Linux, so a single
+desktop application runs natively wherever .NET does. It was chosen instead
+of a Windows-only UI framework specifically so the same desktop client can
+run on macOS (the machine this was developed on) and Windows from one
+codebase. The desktop logic itself lives in a plain .NET library
+(`SocketDesktop.Core`) with no UI dependency, and the Avalonia project is a
+thin UI shell over it.
 
 **`SocketDesktop.Core` responsibilities (no UI dependency):**
 
@@ -174,12 +169,6 @@ configuration status (never the key), the current request, and a live
 activity log, with Connect/Disconnect/Reconnect buttons. All events are
 marshalled to the UI thread; network calls stay off it.
 
-**Legacy `SocketDesktop` (WPF) status:** still builds and is still
-supported on Windows, now delegating all of its networking/AI logic to
-`SocketDesktop.Core` (its own old `Services/DesktopSocketClient.cs` was
-removed). It cross-**builds** on macOS but, being WPF, can only **run** on
-Windows. New work should target the Avalonia client.
-
 ## End-to-end message flow (a new chat message)
 
 1. Browser sends `UserPrompt` over WebSocket (`SessionId`, `RequestId`,
@@ -187,13 +176,13 @@ Windows. New work should target the Avalonia client.
 2. `SocketWeb` validates it, **saves the user message to MySQL**
    (auto-titling the session if this is its first message), loads that
    session's ordered history, and builds an `AiRequest`.
-3. `SocketWeb` routes `AiRequest` to the **one** connected `SocketDesktop`
+3. `SocketWeb` routes `AiRequest` to the **one** connected desktop
    client (never broadcasts it), and sends a `Status: thinking` message
    back to the browser.
-4. `SocketDesktop`'s `DesktopSocketClient` calls `IAiClient.CompleteAsync`
+4. The desktop client's `DesktopSocketClient` calls `IAiClient.CompleteAsync`
    - an **HTTPS** call to the configured AI API, using the conversation
    history it was sent.
-5. On success, `SocketDesktop` sends `AiResponse` back with the same
+5. On success, the desktop client sends `AiResponse` back with the same
    `SessionId`/`RequestId`. On any failure (auth, timeout, provider
    error, malformed response), it sends `Error` instead - never a saved
    assistant message for a failed request.
@@ -222,19 +211,17 @@ project. SignalR would do all of that invisibly. See
 
 ## Technologies used
 
-- **.NET 8** / **C#** - projects target `net8.0` (`SocketDesktop` targets
-  `net8.0-windows` for WPF; `SocketDesktop.Avalonia` is plain `net8.0`).
+- **.NET 8** / **C#** - all projects target plain `net8.0`.
 - **ASP.NET Core** (Razor Pages + minimal APIs) - the web server, REST API.
 - **Raw WebSockets** (`System.Net.WebSockets`) - real-time transport, no SignalR.
 - **Avalonia 11 (Fluent theme)** - the cross-platform desktop client
   (`SocketDesktop.Avalonia`), with **Avalonia.Headless.XUnit** for its
   windowless UI tests.
-- **WPF** - the legacy Windows-only desktop client (`SocketDesktop`).
 - **Entity Framework Core 8** with **Pomelo.EntityFrameworkCore.MySql** - persistence.
 - **MySQL 8** - the database.
 - **Microsoft.Extensions.Configuration** - non-secret defaults +
-  environment-variable overrides, shared by both desktop clients via
-  `SocketDesktop.Core` (each app composes its object graph by hand rather
+  environment-variable overrides, loaded by the desktop client via
+  `SocketDesktop.Core` (the app composes its object graph by hand rather
   than pulling in a full generic host).
 - **Vanilla HTML / CSS / JavaScript** - the web UI (no React/Vue/paid libs).
 - **xUnit** + **Microsoft.AspNetCore.Mvc.Testing** + **EF Core InMemory**
@@ -267,7 +254,7 @@ WebDesktopSocket/
 │  ├─ Pages/                     # Index.cshtml (chat page shell)
 │  └─ wwwroot/                   # css/site.css, js/{api,ws,chat}.js
 │
-├─ SocketDesktop.Core/           # UI-independent bridge logic (no WPF/Avalonia)
+├─ SocketDesktop.Core/           # UI-independent bridge logic (no UI dependency)
 │  ├─ DesktopSocketClient.cs     # connect/reconnect loop, the only caller of IAiClient
 │  ├─ DesktopClientOptions.cs    # config + validation; DesktopConfiguration loader
 │  ├─ DesktopConnectionState.cs  # Disconnected/Connecting/Connected/Reconnecting
@@ -278,11 +265,6 @@ WebDesktopSocket/
 │  ├─ MainWindow.axaml(.cs)      # dashboard XAML
 │  ├─ ViewModels/                # MainWindowViewModel, RelayCommand, ViewModelBase (MVVM)
 │  └─ appsettings.json           # non-secret Ai:BaseUrl / Ai:Model / Socket:Url placeholders
-│
-├─ SocketDesktop/                # legacy WPF desktop AI bridge (Windows-only runtime)
-│  ├─ App.xaml(.cs)              # manual composition root over SocketDesktop.Core
-│  ├─ MainWindow.xaml(.cs)       # operational dashboard
-│  └─ appsettings.json           # non-secret Ai:BaseUrl / Ai:Model placeholders
 │
 ├─ MockAiServer/                 # deterministic OpenAI-compatible test server
 │  ├─ MockOpenAiServer.cs        # fixed reply, ignores API key; in-proc or standalone
@@ -325,9 +307,8 @@ purely database CRUD.
   Install from https://dotnet.microsoft.com/download/dotnet/8.0 if needed.
 - **MySQL 8.0+** - via Docker Compose (recommended) or a local install.
   See "Database (MySQL)" below.
-- **macOS, Windows, or Linux** to run the recommended desktop client
-  (`SocketDesktop.Avalonia`). **Windows** is required only to *run* the
-  legacy `SocketDesktop` (WPF) - everything else runs on any of the three.
+- **macOS, Windows, or Linux** to run the desktop client
+  (`SocketDesktop.Avalonia`) - it runs natively on any of the three.
 
 ### macOS prerequisites
 
@@ -339,9 +320,7 @@ purely database CRUD.
 
 - .NET 8 SDK.
 - Docker Desktop, or a local/remote MySQL 8 server.
-- The **Desktop development / .NET desktop** workload is only needed to
-  build the WPF `SocketDesktop` project; the Avalonia client needs nothing
-  beyond the SDK.
+- No extra workloads - `SocketDesktop.Avalonia` needs nothing beyond the SDK.
 
 For real AI replies you also need an **AI API key** for any
 OpenAI-compatible provider (OpenAI, OpenRouter, a local Ollama/LM Studio
@@ -365,9 +344,9 @@ nested configuration key (`Ai__BaseUrl` → `Ai:BaseUrl`), the standard
 read directly, so it matches exactly what's documented and is never bound
 through a config section that could end up in a file.
 
-Both desktop clients read the same variables via `SocketDesktop.Core`, and
-each app's `appsettings.json` holds only the **non-secret** `Ai:BaseUrl` /
-`Ai:Model` (and `Socket:Url`) placeholders.
+The desktop client reads these variables via `SocketDesktop.Core`, and its
+`appsettings.json` holds only the **non-secret** `Ai:BaseUrl` / `Ai:Model`
+(and `Socket:Url`) placeholders.
 
 See `.env.example` for the full template with placeholder values. Copy it
 to `.env` (already gitignored) and fill in your own values - never commit
@@ -430,11 +409,11 @@ placeholder values) is committed.
 
 ## AI provider configuration
 
-`SocketDesktop` is the only project that calls the AI API. Any
+`SocketDesktop.Avalonia` is the only project that calls the AI API. Any
 OpenAI-compatible provider works - set these before running it:
 
 ```
-# SocketDesktop/appsettings.json (non-secret, committed with placeholders)
+# SocketDesktop.Avalonia/appsettings.json (non-secret, committed with placeholders)
 {
   "Ai": {
     "BaseUrl": "https://api.openai.com/v1",
@@ -448,7 +427,7 @@ OpenAI-compatible provider works - set these before running it:
 $env:AI_API_KEY = "sk-..."
 ```
 
-If `AI_API_KEY`, `Ai:BaseUrl`, or `Ai:Model` is missing, `SocketDesktop`
+If `AI_API_KEY`, `Ai:BaseUrl`, or `Ai:Model` is missing, the desktop client
 still starts and connects (so you can see this clearly in its dashboard),
 but any `AiRequest` it receives gets a specific
 "desktop AI client is not configured" `Error` back to the browser instead
@@ -469,10 +448,9 @@ first request that touches it), so the practical order is:
 3. **SocketWeb** (`dotnet run --project SocketWeb`) - wait for
    `Now listening on: http://localhost:5080`.
 4. **Desktop client** - the cross-platform
-   `dotnet run --project SocketDesktop.Avalonia` (macOS/Windows/Linux), or
-   the Windows-only `dotnet run --project SocketDesktop` (WPF). It connects
-   to `ws://localhost:5080/ws` as soon as it opens, so `SocketWeb` must
-   already be listening.
+   `dotnet run --project SocketDesktop.Avalonia` (macOS/Windows/Linux). It
+   connects to `ws://localhost:5080/ws` as soon as it opens, so `SocketWeb`
+   must already be listening.
 5. **Browser** - open `http://localhost:5080`.
 
 Steps 4 and 5 can happen in either order relative to each other; both
@@ -488,11 +466,8 @@ From the repository root:
 dotnet build
 ```
 
-This builds every project via `WebDesktopSocket.sln`. The legacy WPF
-`SocketDesktop` can be **cross-built** (compiled, not run) on non-Windows
-machines thanks to `<EnableWindowsTargeting>true</EnableWindowsTargeting>`
-- see "macOS setup" below. The Avalonia client (`SocketDesktop.Avalonia`)
-builds *and runs* on macOS, Windows and Linux.
+This builds every project via `WebDesktopSocket.sln`. The Avalonia client
+(`SocketDesktop.Avalonia`) builds *and runs* on macOS, Windows and Linux.
 
 ## Running tests
 
@@ -549,7 +524,7 @@ in a browser. You'll see "Connected" (WebSocket) and "AI: Offline"
 
 ### 3. Desktop client
 
-**macOS / Linux / Windows - Avalonia (recommended):**
+`SocketDesktop.Avalonia` runs natively on macOS, Linux and Windows:
 
 ```bash
 # macOS/Linux (bash/zsh)
@@ -560,21 +535,14 @@ dotnet run --project SocketDesktop.Avalonia
 ```
 
 ```powershell
-# Windows (PowerShell) - Avalonia
+# Windows (PowerShell)
 $env:Ai__BaseUrl = "https://api.openai.com/v1"
 $env:Ai__Model   = "gpt-4o-mini"
 $env:AI_API_KEY  = "sk-..."
 dotnet run --project SocketDesktop.Avalonia
 ```
 
-**Windows only - legacy WPF:**
-
-```powershell
-$env:AI_API_KEY = "sk-..."
-dotnet run --project SocketDesktop
-```
-
-Either client's dashboard should show "Connected" / "Registered as
+The client's dashboard should show "Connected" / "Registered as
 Desktop", and the browser's "AI" status should flip to "Online".
 
 ### 4. Try it out
@@ -633,9 +601,8 @@ dotnet publish SocketDesktop.Avalonia -c Release -r win-x64  --self-contained
 
 Helper scripts wrap these: [`scripts/publish-macos.sh`](scripts/publish-macos.sh)
 (osx-arm64 + osx-x64) and [`scripts/publish-windows.ps1`](scripts/publish-windows.ps1)
-(win-x64). Published output goes under each project's `bin/.../publish/`
-and is gitignored. The legacy WPF `SocketDesktop` is published on Windows
-only.
+(win-x64). Published output goes under the project's `bin/.../publish/`
+and is gitignored.
 
 > **macOS Gatekeeper / Windows SmartScreen:** these published builds are
 > **unsigned**. On macOS, Gatekeeper may refuse to open them ("cannot be
@@ -656,12 +623,11 @@ only.
    All tests use the in-memory database and the local `MockAiServer`, so
    **no real AI key or paid service is ever required**.
 4. Publishes `SocketDesktop.Avalonia` for `osx-arm64` + `osx-x64` (on the
-   macOS runner) and `win-x64` (on the Windows runner), and **builds the
-   legacy WPF `SocketDesktop` on Windows**.
+   macOS runner) and `win-x64` (on the Windows runner).
 5. Uploads the publish outputs as build artifacts.
 
-The job fails on any real build, test, or publish failure. WPF is only
-ever built (never run) on the Windows runner; it is never touched on macOS.
+The job fails on any real build, test, or publish failure. Both operating
+systems run the exact same build, test and publish steps.
 
 ## macOS setup (what was actually verified here)
 
@@ -694,23 +660,13 @@ Here's exactly what that means for each piece:
 - **Exactly-once persistence**: after each tested prompt, MySQL was queried
   directly to confirm exactly one `user` row and one `assistant` row per
   request, correct roles/ordering, and **zero duplicate message groups**.
-- **Legacy `SocketDesktop` (WPF)**: **cross-builds** (compiles) on macOS
-  via `<EnableWindowsTargeting>true</EnableWindowsTargeting>` -
-  `dotnet build` succeeds with 0 warnings/errors here. This only proves it
-  compiles; **the WPF application was never run on macOS** - WPF's runtime
-  doesn't exist outside Windows. Its shared logic is exercised through
-  `SocketDesktop.Core`'s unit tests and the routing/integration tests. The
-  real WPF UI needs the Windows checklist below (and CI builds it on the
-  Windows runner).
 
 ## Windows setup and verification checklist
 
-On Windows you can run either desktop client. `SocketDesktop.Avalonia` is
-covered by CI on `windows-latest` (build + headless UI tests + publish),
-but its Windows GUI and the WPF `SocketDesktop` GUI were **not physically
+`SocketDesktop.Avalonia` is covered by CI on `windows-latest` (build +
+headless UI tests + publish), but its Windows GUI was **not physically
 clicked on a Windows machine** during this work - that is what this
-checklist is for. Substitute `dotnet run --project SocketDesktop.Avalonia`
-for step 5 to exercise the cross-platform client instead of WPF. To verify:
+checklist is for. To verify on Windows:
 
 1. `dotnet --version` shows 8.x.
 2. Start MySQL (Docker Compose or local) and confirm you can connect:
@@ -719,9 +675,9 @@ for step 5 to exercise the cross-platform client instead of WPF. To verify:
 4. Set `ConnectionStrings__ChatDb`, run `SocketWeb` -
    `http://localhost:5080` loads, shows "Connected" / "AI: Offline".
 5. Set `AI_API_KEY` (and `Ai:BaseUrl`/`Ai:Model` if not using the
-   defaults), run `SocketDesktop` - its dashboard shows "Connected" /
-   "Registered as Desktop" / "API key: Configured"; the browser's "AI"
-   status flips to "Online".
+   defaults), run `SocketDesktop.Avalonia` - its dashboard shows
+   "Connected" / "Registered as Desktop" / "API key: Configured"; the
+   browser's "AI" status flips to "Online".
 6. New chat -> send a prompt -> "AI is thinking" appears -> a real
    assistant reply appears. Confirm the row exists in `ChatMessages`.
 7. Create a second session; confirm messages never mix between the two;
@@ -729,7 +685,7 @@ for step 5 to exercise the cross-platform client instead of WPF. To verify:
    continue it and confirm the AI still has that context.
 8. Rename a session (inline edit, Enter to confirm); delete a session
    (confirm dialog) and confirm its messages are gone too (cascade).
-9. Stop `SocketDesktop` -> send a prompt -> browser shows a clear
+9. Stop `SocketDesktop.Avalonia` -> send a prompt -> browser shows a clear
    "desktop offline" error, not a hang.
 10. Set an intentionally wrong `AI_API_KEY` -> send a prompt -> browser
     shows an authentication-failure error (not a raw exception).
@@ -741,17 +697,17 @@ for step 5 to exercise the cross-platform client instead of WPF. To verify:
 
 ## Troubleshooting
 
-- **`SocketDesktop` dashboard shows "Disconnected" and never connects**:
-  make sure `SocketWeb` is running first, and nothing else is using port
-  5080.
-- **Browser shows "AI: Offline"**: `SocketDesktop` isn't connected/
+- **The desktop client's dashboard shows "Disconnected" and never
+  connects**: make sure `SocketWeb` is running first, and nothing else is
+  using port 5080.
+- **Browser shows "AI: Offline"**: the desktop client isn't connected/
   registered yet, or it disconnected - the browser will flip to "Online"
   automatically once it registers (no refresh needed).
 - **"The desktop AI client is offline" error when sending a prompt**: no
-  `SocketDesktop` instance is currently connected. Start it, then retry -
+  desktop client is currently connected. Start it, then retry -
   the same message is safe to resend.
-- **"The desktop AI client is not configured" error**: `SocketDesktop` is
-  connected, but `Ai:BaseUrl`, `Ai:Model`, or `AI_API_KEY` is missing -
+- **"The desktop AI client is not configured" error**: the desktop client
+  is connected, but `Ai:BaseUrl`, `Ai:Model`, or `AI_API_KEY` is missing -
   check its dashboard's "AI Configuration" card.
 - **Authentication-failure error on every prompt**: the AI API rejected
   `AI_API_KEY` - it's wrong, expired, or doesn't match `Ai:BaseUrl`'s provider.
@@ -770,7 +726,7 @@ for step 5 to exercise the cross-platform client instead of WPF. To verify:
 
 ## Security notes
 
-- **The AI API key never leaves `SocketDesktop`.** It's read only from the
+- **The AI API key never leaves the desktop client.** It's read only from the
   `AI_API_KEY` environment variable, is never written to any committed
   file, never sent to `SocketWeb` or the browser, and is never logged or
   included in an exception message. The desktop dashboard shows only
@@ -794,24 +750,21 @@ for step 5 to exercise the cross-platform client instead of WPF. To verify:
 
 ## Known limitations
 
-- **Legacy WPF runs on Windows only.** `SocketDesktop` cross-builds
-  (compiles) on macOS/Linux but cannot run there - use
-  `SocketDesktop.Avalonia` for cross-platform. See the Windows checklist.
-- **Unsigned desktop builds.** Published Avalonia/WPF binaries are not code
+- **Unsigned desktop builds.** Published Avalonia binaries are not code
   signed, so macOS Gatekeeper / Windows SmartScreen will warn on first
   launch (see "Building and publishing"). Fine for a demo, not for
   distribution.
-- **Windows GUI not physically inspected.** The Windows builds are verified
-  by CI (compile/test/publish) only; no one clicked the WPF or Windows
-  Avalonia window on a real Windows desktop during this work.
+- **Windows GUI not physically inspected.** The Windows build is verified
+  by CI (build/test/publish) only; no one clicked the Windows Avalonia
+  window on a real Windows desktop during this work.
 - **No authentication** - anyone who can reach `localhost:5080` can use any
   session. Fine for a single-user local demo; a real deployment needs auth.
 - **Plain `ws://`** between browser/desktop and `SocketWeb` (no `wss://`) -
   avoids dev-certificate setup. The call to the *AI API* itself is HTTPS.
 - **Full conversation history is sent to the AI every request**, with no
   truncation - a very long chat could hit a provider's context limit.
-- **"Most-recently-registered desktop wins"** - if two `SocketDesktop`
-  instances connect, only the newest receives `AiRequest`s (no queueing).
+- **"Most-recently-registered desktop wins"** - if two desktop clients
+  connect, only the newest receives `AiRequest`s (no queueing).
 - The in-memory `RequestId` tracking dictionaries are never trimmed - fine
   for a single long-running session, not for an unbounded-lifetime service.
 
@@ -827,16 +780,15 @@ for step 5 to exercise the cross-platform client instead of WPF. To verify:
 | `SocketWeb/Data/ChatRepository.cs` | All MySQL reads/writes - sessions, messages, auto-titling, ordering. |
 | `SocketWeb/Api/SessionEndpoints.cs` | The `/api/sessions` REST CRUD endpoints. |
 | `SocketWeb/wwwroot/js/{api,ws,chat}.js` | The browser: REST calls, WebSocket connection/reconnect, and all UI rendering/state. |
-| `SocketDesktop.Core/DesktopSocketClient.cs` | Connects to `SocketWeb`, handles `AiRequest`, calls `IAiClient`, reconnect loop. The only place that calls the AI API. Shared by both desktop UIs. |
+| `SocketDesktop.Core/DesktopSocketClient.cs` | Connects to `SocketWeb`, handles `AiRequest`, calls `IAiClient`, reconnect loop. The only place that calls the AI API. |
 | `SocketDesktop.Core/DesktopClientOptions.cs`, `DesktopConfiguration.cs` | Desktop configuration and its validation (`Socket__Url`, `Ai__*`, `AI_API_KEY`). |
 | `SocketDesktop.Avalonia/ViewModels/MainWindowViewModel.cs` | The Avalonia dashboard view model (MVVM) binding `DesktopSocketClient` events to the UI. |
 | `SocketDesktop.Avalonia/App.axaml.cs` | Composition root: wires up `DesktopSocketClient`, the AI client, and the window. |
-| `SocketDesktop/App.xaml.cs`, `MainWindow.xaml.cs` | The legacy WPF app, now delegating to `SocketDesktop.Core`. |
 | `MockAiServer/MockOpenAiServer.cs` | Deterministic OpenAI-compatible test server (fixed reply, ignores the key). |
 
 See [LEARNING_NOTES.md](LEARNING_NOTES.md) for a deeper explanation of
 *how* the code works, aimed at someone learning WebSockets/ASP.NET
-Core/Avalonia/WPF/EF Core for the first time.
+Core/Avalonia/EF Core for the first time.
 
 ## License
 

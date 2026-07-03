@@ -7,8 +7,8 @@ using SocketWeb.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Make sure the site always runs on the same, fixed port, so the WPF
-// desktop app always knows exactly where to connect.
+// Make sure the site always runs on the same, fixed port, so the desktop
+// app always knows exactly where to connect.
 builder.WebHost.UseUrls("http://localhost:5080");
 
 builder.Services.AddRazorPages();

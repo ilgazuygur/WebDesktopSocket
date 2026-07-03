@@ -1,8 +1,8 @@
 namespace SocketShared.Ai;
 
-// Base type for every error an IAiClient can throw. Callers (the WPF app's
-// AiRequest handler) can catch this one type to know "something went wrong
-// talking to the AI", and inspect the concrete subtype for detail.
+// Base type for every error an IAiClient can throw. Callers (the desktop
+// client's AiRequest handler) can catch this one type to know "something
+// went wrong talking to the AI", and inspect the concrete subtype for detail.
 //
 // None of these exceptions ever include the API key in their message -
 // only the ApiKey field on AiOptions holds that value, and it is never

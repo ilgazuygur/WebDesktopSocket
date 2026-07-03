@@ -6,8 +6,8 @@ using SocketShared.Protocol;
 
 namespace SocketWeb.Services;
 
-// Tracks every open WebSocket connection (browser tabs and the WPF
-// desktop app all connect the same way) along with its server-assigned
+// Tracks every open WebSocket connection (browser tabs and the desktop
+// app all connect the same way) along with its server-assigned
 // id and role, and knows how to safely send to one specific connection -
 // this is what makes routing (instead of the old "broadcast to
 // everyone") possible.
