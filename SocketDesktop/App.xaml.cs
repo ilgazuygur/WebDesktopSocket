@@ -1,58 +1,44 @@
+using System.Net.Http;
 using System.Windows;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using SocketDesktop.Services;
+using SocketDesktop.Core;
+using SocketDesktop.Core.Sockets;
 using SocketShared.Ai;
 
 namespace SocketDesktop;
 
 public partial class App : Application
 {
-    // The generic host gives this WPF app the same dependency injection /
-    // configuration / lifetime story ASP.NET Core apps use - configuration
-    // is loaded from appsettings.json + environment variables, and
-    // disposing the host on exit cleanly disposes everything registered in
-    // it (including DesktopSocketClient's WebSocket connection).
-    private IHost? _host;
+    // Manual composition root (constructor-injection style DI), matching
+    // SocketDesktop.Avalonia. Configuration - including reading AI_API_KEY
+    // only from the environment - is handled by the shared
+    // SocketDesktop.Core.DesktopConfiguration, so both desktop clients load
+    // it identically.
+    private DesktopSocketClient? _client;
+    private HttpClient? _httpClient;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        _host = Host.CreateDefaultBuilder()
-            .ConfigureServices((context, services) =>
-            {
-                var aiOptions = new AiOptions();
-                context.Configuration.GetSection("Ai").Bind(aiOptions);
+        var options = DesktopConfiguration.Load();
 
-                // Deliberately read directly from the environment variable
-                // (not through configuration section binding) so the name
-                // matches exactly what README.md / .env.example document:
-                // AI_API_KEY. Never written to appsettings.json, logged, or
-                // included in any exception message anywhere in this app.
-                aiOptions.ApiKey = Environment.GetEnvironmentVariable("AI_API_KEY") ?? string.Empty;
-                services.AddSingleton(aiOptions);
+        // SocketDesktop is the only place that calls the AI API.
+        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        IAiClient aiClient = new OpenAiCompatibleClient(_httpClient, options.Ai);
 
-                // SocketDesktop is the only project in the solution that
-                // creates or calls IAiClient - SocketWeb never registers it.
-                services.AddHttpClient<IAiClient, OpenAiCompatibleClient>(client =>
-                {
-                    client.Timeout = TimeSpan.FromSeconds(60);
-                });
+        _client = new DesktopSocketClient(aiClient, options, new RealClientWebSocketFactory());
 
-                services.AddSingleton<DesktopSocketClient>();
-                services.AddSingleton<MainWindow>();
-            })
-            .Build();
-
-        var mainWindow = _host.Services.GetRequiredService<MainWindow>();
+        var mainWindow = new MainWindow(_client, options);
         mainWindow.Show();
     }
 
-    protected override void OnExit(ExitEventArgs e)
+    protected override async void OnExit(ExitEventArgs e)
     {
-        _host?.Dispose();
+        if (_client is not null)
+        {
+            await _client.DisposeAsync();
+        }
+        _httpClient?.Dispose();
         base.OnExit(e);
     }
 }

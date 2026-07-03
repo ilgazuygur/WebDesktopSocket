@@ -296,61 +296,109 @@ literal text instead of executing it. Line breaks are preserved safely
 too, via CSS (`white-space: pre-wrap`) rather than converting `\n` into
 `<br>` HTML, which would have reintroduced the same risk.
 
-## SocketDesktop - the WPF client
+## The desktop bridge: one core, two UIs
 
-### DesktopSocketClient
+The desktop side is split into a **UI-independent core** and **two thin
+UIs** on top of it. This is the single most important design idea in the
+project, so it's worth going slowly.
 
-`Services/DesktopSocketClient.cs` is the WPF-side counterpart to
-`ChatSocketHandler` - though structurally simpler, since it only has to
-handle one message type that matters (`AiRequest`):
+### Why split it at all?
+
+The original desktop app was **WPF**, which is Windows-only (more on *why*
+below). To also run on macOS, the interesting logic - connecting,
+registering, handling `AiRequest`, reconnecting - was pulled out of the UI
+into a plain .NET library, `SocketDesktop.Core`, that has **no UI
+dependency at all**. A UI is then just a shell that subscribes to the
+core's events and shows them. Two shells exist:
+
+- **`SocketDesktop.Avalonia`** - cross-platform (macOS/Windows/Linux). The
+  recommended client.
+- **`SocketDesktop`** - the original WPF app, kept and rewired to use the
+  same core (its old private copy of the logic was deleted).
+
+Because the logic lives in one place, both UIs behave identically and there
+is only one thing to test.
+
+### `SocketDesktop.Core.DesktopSocketClient`
+
+`DesktopSocketClient` is the desktop-side counterpart to `ChatSocketHandler`.
+It owns a single managed loop: connect to `/ws`, register, pump the receive
+loop, and when the connection ends, wait (with **bounded exponential
+backoff**) and reconnect - until asked to stop.
 
 ```csharp
 await SendAsync(new SocketMessage { Type = MessageType.ClientHello, Role = ClientRole.Desktop }, ct);
 // ... receive loop ...
-// on AiRequest: call IAiClient.CompleteAsync, then send AiResponse (success)
-//               or Error (auth failure / timeout / provider error / malformed response)
+// on HelloAck:   State = Connected
+// on AiRequest:  call IAiClient.CompleteAsync, then send AiResponse (success)
+//                or Error (auth failure / timeout / provider error / malformed response)
 ```
 
-It uses the same two tricks `SocketWeb`'s side does, for the same
-reasons: a `SemaphoreSlim` around every send (so two replies can never
-be written to the socket at once), and a `ConcurrentDictionary` of
-already-handled `RequestId`s (so a redelivered `AiRequest`, e.g. around a
-reconnect, is never processed twice).
+It uses the same two safety tricks `SocketWeb`'s side does: a
+`SemaphoreSlim` around every send (so two messages can never be written to
+the socket at once), and a `ConcurrentDictionary` of already-handled
+`RequestId`s (so a redelivered `AiRequest`, e.g. around a reconnect, is
+never processed twice). It exposes plain C# **events** - `StateChanged`,
+`ActivityLogged`, `CurrentRequestChanged` - and a `DesktopConnectionState`
+enum (`Disconnected`/`Connecting`/`Connected`/`Reconnecting`). A UI just
+subscribes; it doesn't know anything about WebSockets.
 
-### Generic Host, dependency injection, and configuration
+Two more details worth noticing:
 
-`App.xaml.cs` builds a `Microsoft.Extensions.Hosting` generic host - the
-same DI/configuration/lifetime system ASP.NET Core apps use - instead of
-`new`-ing everything up by hand. Configuration comes from
-`appsettings.json` (`Ai:BaseUrl`, `Ai:Model` - non-secret) plus the
-`AI_API_KEY` environment variable (read directly, not through the
-`Ai:*` config path, so its name matches exactly what's documented).
-`MainWindow` itself is resolved from the DI container, so its
-constructor can simply ask for the `DesktopSocketClient` and `AiOptions`
-it needs.
+- **Testability by abstraction.** The client doesn't `new` a real
+  `ClientWebSocket`; it takes an `IClientWebSocketFactory`. Tests inject a
+  *fake* socket to make `ConnectAsync` throw, feed canned messages, or
+  simulate the server closing - so the whole reconnect loop is unit-tested
+  deterministically, with millisecond backoffs, no real network.
+- **Idempotent `Start` + graceful `StopAsync`.** `Start()` can be called
+  twice (a double-clicked "Connect") without launching a second loop, and
+  `StopAsync()`/`DisposeAsync()` cancel cleanly via `CancellationToken`s
+  without hanging.
 
-### Talking back to the UI thread
+### Composition root instead of a full host
 
-WPF (like most UI frameworks) only allows you to touch UI controls (like
-`TextBlock`) from the one special "UI thread". But `DesktopSocketClient`'s
-events (`ConnectionStatusChanged`, `ActivityLogged`, ...) can fire from a
-background thread (the WebSocket receive loop). That's why every handler
-in `MainWindow.xaml.cs` wraps its work in:
+Neither UI uses a big generic host. Each has a tiny **composition root**
+that `new`s up the object graph by hand: build `DesktopClientOptions` from
+configuration (via the shared `DesktopConfiguration.Load()`), create the
+`HttpClient` + `OpenAiCompatibleClient`, and construct the
+`DesktopSocketClient`. Configuration is `appsettings.json` (`Ai:BaseUrl`,
+`Ai:Model`, `Socket:Url` - non-secret) plus environment-variable overrides;
+`AI_API_KEY` is read directly from the environment (not through the `Ai:*`
+config path) so its name matches exactly what's documented and it never
+ends up bound into a file. This keeps the app's lifetime entirely the UI
+framework's, and makes the whole graph obvious in one small method.
+
+### MVVM and talking back to the UI thread (Avalonia)
+
+The Avalonia client uses **MVVM** (Model-View-ViewModel): the XAML view
+(`MainWindow.axaml`) contains no logic; it *binds* to properties on a
+`MainWindowViewModel` (e.g. `ConnectionStatusText`, `IsRegistered`, the
+`ActivityLog` collection) and to `ICommand`s (`ConnectCommand`, ...). When
+a bound property changes, the view updates automatically via
+`INotifyPropertyChanged`. This is the standard way to keep UI and logic
+separate and to make the view model testable on its own.
+
+Like WPF, Avalonia only lets you touch UI state from the one UI thread, but
+`DesktopSocketClient`'s events fire from a background thread (the receive
+loop). So the view model marshals every handler back onto the UI thread:
 
 ```csharp
-Dispatcher.Invoke(() => { ... });
+// injected as `_post`; Dispatcher.UIThread.Post in the app, a() inline in tests
+_post(() => { ConnectionStatusText = ...; });
 ```
 
-`Dispatcher.Invoke` hops back onto the UI thread before touching anything
-on screen.
+Injecting that "post to UI thread" delegate is what lets the same view
+model run as a plain unit test (post = run inline) and as a real window
+(post = `Dispatcher.UIThread.Post`). The legacy WPF window does the same
+thing with `Dispatcher.Invoke(...)`.
 
-### What the WPF window actually shows
+### What the desktop window actually shows
 
-Since the chat UI lives entirely on the web, `SocketDesktop`'s window is
-an **operational dashboard**: WebSocket connection status, registration
-status, AI configuration status (explicitly never the key itself - only
-"Configured" or "Missing"), what request (if any) is being processed
-right now, and a short activity log.
+Since the chat UI lives entirely on the web, the desktop window (either
+UI) is an **operational dashboard**: WebSocket connection status,
+registration status, AI configuration status (explicitly never the key
+itself - only "Configured" or "Missing"), what request (if any) is being
+processed right now, and a short activity log.
 
 ## Cross-cutting concepts used throughout
 
@@ -358,14 +406,17 @@ right now, and a short activity log.
 
 Rather than each class creating the objects it depends on (e.g.
 `ChatSocketHandler` doing `new ChatRepository(new ChatDbContext(...))`),
-those objects are *registered* once in a container (`builder.Services.Add...`
-in `SocketWeb/Program.cs`, `services.Add...` in `SocketDesktop/App.xaml.cs`)
-and *requested* through constructors. The container decides how to build
-each one and how long it lives (a **singleton** lives for the whole app; a
-**scoped** service, like `ChatDbContext`, lives for one unit of work). This
-keeps classes focused on their own job, makes their dependencies explicit,
-and - importantly for this project - makes them easy to test by handing in
-a fake or in-memory version instead of the real thing.
+those objects are provided from the outside through constructors. On the
+server, `SocketWeb/Program.cs` registers them in a real DI **container**
+(`builder.Services.Add...`), which decides how to build each one and how
+long it lives (a **singleton** lives for the whole app; a **scoped**
+service, like `ChatDbContext`, lives for one unit of work). The desktop
+apps do the lighter-weight version of the same idea - a hand-written
+**composition root** in `App.axaml.cs` / `App.xaml.cs` that `new`s the
+graph up once. Either way the point is the same: classes stay focused on
+their own job, their dependencies are explicit, and they're easy to test by
+handing in a fake or in-memory version (a fake `IClientWebSocket`, a fake
+`IAiClient`, the EF InMemory provider) instead of the real thing.
 
 ### async / await and CancellationToken
 
@@ -386,9 +437,11 @@ seconds, so a hung request turns into a clean timeout `Error` to the
 browser rather than a browser that waits forever.
 
 Related: **`IAsyncDisposable`/`IDisposable`**. Things that hold resources
-(WebSocket connections, semaphores, the desktop's `IHost`) implement a
-dispose method so those resources are released deterministically - e.g.
-closing `SocketDesktop` disposes its host, which closes its WebSocket.
+(WebSocket connections, semaphores, the desktop's `DesktopSocketClient`
+and `HttpClient`) implement a dispose method so those resources are
+released deterministically - e.g. closing the desktop app calls
+`DesktopSocketClient.DisposeAsync`, which stops the loop and closes its
+WebSocket.
 
 ### Error handling
 
@@ -428,13 +481,30 @@ the server, and internal details must never leak to the browser.* Concretely:
   playing the browser, one playing a "fake desktop") and proves the whole
   `UserPrompt -> AiRequest -> AiResponse` round trip is routed and
   persisted correctly.
-- **`SocketDesktop` itself** (the actual WPF process) can't be exercised
-  this way - a `net8.0-windows`/WPF assembly can't load on macOS/Linux
-  even with cross-build enabled. Its logic is covered indirectly (the AI
-  client it calls is tested directly; the protocol/routing behavior it
-  participates in is tested via the fake-desktop-client tests above), but
-  the real WPF UI and process genuinely need the Windows checklist in
-  README.md.
+- **The desktop core** (`SocketDesktop.Core`) is now tested *directly*,
+  because it has no UI dependency. `Socket.Tests/DesktopCore` drives the
+  real `DesktopSocketClient` against a fake `IClientWebSocket`: it verifies
+  registration, `AiRequest` → `AiResponse` with matching ids, duplicate-id
+  handling, the "AI not configured" and auth-failure error paths, reconnect
+  after a dropped connection, retry after a failed connect, idempotent
+  `Start`, and clean `StopAsync`/`DisposeAsync` - all with millisecond
+  backoffs so it's fast and not flaky.
+- **The Avalonia view model** is tested with an injected inline "post"
+  delegate (so no UI thread is needed), and the **real Avalonia UI** is
+  tested *headlessly* in `SocketDesktop.Avalonia.Tests` using
+  `Avalonia.Headless.XUnit`: it builds the actual `MainWindow` + view model
+  in a windowless Avalonia runtime and asserts the XAML bindings and
+  command wiring (e.g. the Connect button disables once connected). This
+  catches binding mistakes a plain unit test can't.
+- **The real AI client against a real (mock) server**: one test points the
+  production `OpenAiCompatibleClient` at an in-process `MockAiServer` over a
+  real HTTP connection, proving the actual client↔provider path works end
+  to end without a real key - the same mock the local/CI end-to-end runs use.
+- **The legacy WPF `SocketDesktop` process** still can't be run off Windows
+  (a `net8.0-windows`/WPF assembly can't load on macOS/Linux even with
+  cross-build enabled), but that no longer matters for coverage: all of its
+  logic now lives in `SocketDesktop.Core`, which *is* fully tested above.
+  Only the WPF window's pixels need the Windows checklist in README.md.
 
 ## Known simplifications (fine for a learning project, not for production)
 
@@ -458,20 +528,44 @@ the server, and internal details must never leak to the browser.* Concretely:
 
 ## macOS vs Windows: what runs where
 
-This project was developed mainly on macOS, and it's worth being precise
-about what that means, because WPF is Windows-only:
+This project was developed and verified natively on macOS, and it's worth
+being precise about what runs where.
 
-- **`SocketShared`, `SocketWeb`, `Socket.Tests`** are fully
-  cross-platform - they build and run on macOS, Linux, or Windows. All the
-  server logic, the REST API, the persistence layer, and every automated
-  test run anywhere.
+**Why WPF is Windows-only, and why Avalonia isn't.** WPF renders through
+Windows-specific technology (DirectX/GDI via `PresentationFramework` and
+friends) that simply doesn't exist on macOS or Linux - so a WPF *runtime*
+can only exist on Windows. **Avalonia** solves the same problem a different
+way: it doesn't call the OS's native widgets at all. It draws every control
+itself (via Skia) onto a window the OS gives it, and only needs a thin
+platform-specific layer to open that window and feed it input. Because the
+"draw it ourselves" part is the same everywhere, the *same* Avalonia app
+runs on macOS, Windows and Linux. That's the whole reason it was added.
+
+- **`SocketShared`, `SocketWeb`, `SocketDesktop.Core`,
+  `SocketDesktop.Avalonia`, `MockAiServer`, and all tests** are fully
+  cross-platform - they build **and run** on macOS, Linux, or Windows. The
+  Avalonia desktop client was run as a real window on macOS and driven end
+  to end against real MySQL and the mock AI.
 - **`SocketDesktop`** targets `net8.0-windows` and uses WPF. With
   `<EnableWindowsTargeting>true</EnableWindowsTargeting>` it will
-  **compile** ("cross-build") on macOS/Linux, which is useful for catching
-  compile errors - but WPF's actual runtime only exists on Windows, so the
-  desktop app can only be *run* on Windows. This project is honest about
-  that: the WPF UI was never claimed to be runtime-tested on macOS, and
-  README.md has a Windows checklist for verifying it.
+  **compile** ("cross-build") on macOS/Linux (useful for catching compile
+  errors), but can only be *run* on Windows. Its shared logic is fully
+  tested via `SocketDesktop.Core`; only its actual window needs Windows.
+
+### The CI matrix (why two operating systems)
+
+Because "runs on macOS" and "runs on Windows" are both claims worth
+backing up automatically, CI (`.github/workflows/ci.yml`) runs the same
+build/test/publish steps on **both `macos-latest` and `windows-latest`**.
+The macOS runner proves the cross-platform pieces (including the Avalonia
+headless UI tests) really work on macOS; the Windows runner additionally
+**builds the WPF `SocketDesktop`** (the one thing macOS can only compile,
+not run) and publishes the Avalonia client for Windows. Every test uses the
+in-memory database and the local `MockAiServer`, so **CI never needs a real
+AI key or any paid service**. This is an honest halfway point: it proves
+the Windows build compiles, tests pass, and publishes - but a green Windows
+CI run is *not* the same as a human clicking the WPF window, which is what
+the README's Windows checklist is still for.
 
 ## How to explain this project to an internship supervisor
 

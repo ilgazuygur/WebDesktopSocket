@@ -2,33 +2,34 @@ using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Shapes;
-using SocketDesktop.Services;
-using SocketShared.Ai;
+using SocketDesktop.Core;
 
 namespace SocketDesktop;
 
+// The legacy Windows-specific dashboard. All the real networking/AI logic
+// now lives in SocketDesktop.Core.DesktopSocketClient (shared with the
+// cross-platform SocketDesktop.Avalonia app); this window just renders its
+// state and events onto the WPF UI.
 public partial class MainWindow : Window
 {
     private const int MaxLogEntries = 200;
 
-    private readonly DesktopSocketClient _socketClient;
+    private readonly DesktopSocketClient _client;
 
-    // Bound to the ItemsControl in MainWindow.xaml - each entry is one
-    // already-formatted "HH:mm:ss  message" line.
     private readonly ObservableCollection<string> _activityLog = new();
 
-    public MainWindow(DesktopSocketClient socketClient, AiOptions aiOptions)
+    public MainWindow(DesktopSocketClient client, DesktopClientOptions options)
     {
         InitializeComponent();
 
-        _socketClient = socketClient;
+        _client = client;
         ActivityLogList.ItemsSource = _activityLog;
 
-        BaseUrlText.Text = string.IsNullOrWhiteSpace(aiOptions.BaseUrl) ? "(not set)" : aiOptions.BaseUrl;
-        ModelText.Text = string.IsNullOrWhiteSpace(aiOptions.Model) ? "(not set)" : aiOptions.Model;
-        SetApiKeyStatus(!string.IsNullOrWhiteSpace(aiOptions.ApiKey));
+        BaseUrlText.Text = string.IsNullOrWhiteSpace(options.Ai.BaseUrl) ? "(not set)" : options.Ai.BaseUrl;
+        ModelText.Text = string.IsNullOrWhiteSpace(options.Ai.Model) ? "(not set)" : options.Ai.Model;
+        SetApiKeyStatus(!string.IsNullOrWhiteSpace(options.Ai.ApiKey));
 
-        if (!aiOptions.IsComplete)
+        if (!options.Ai.IsComplete)
         {
             AppendLog("AI configuration is incomplete - set Ai:BaseUrl / Ai:Model in appsettings.json and the AI_API_KEY environment variable. AiRequests will fail with a clear error until this is fixed.");
         }
@@ -36,35 +37,48 @@ public partial class MainWindow : Window
         // Events can arrive on a background thread (the WebSocket receive
         // loop), but WPF UI elements can only be touched from the UI
         // thread, so every handler hops back onto it with Dispatcher.Invoke.
-        _socketClient.ConnectionStatusChanged += isConnected => Dispatcher.Invoke(() => SetConnectionStatus(isConnected));
-        _socketClient.ActivityLogged += message => Dispatcher.Invoke(() => AppendLog(message));
-        _socketClient.CurrentRequestChanged += status => Dispatcher.Invoke(() => SetCurrentRequestStatus(status));
+        _client.StateChanged += state => Dispatcher.Invoke(() => SetConnectionStatus(state));
+        _client.ActivityLogged += message => Dispatcher.Invoke(() => AppendLog(message));
+        _client.CurrentRequestChanged += status => Dispatcher.Invoke(() => SetCurrentRequestStatus(status));
     }
 
-    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        await _socketClient.ConnectAsync();
+        _client.Start();
     }
 
-    private async void ReconnectButton_Click(object sender, RoutedEventArgs e)
+    private void ReconnectButton_Click(object sender, RoutedEventArgs e)
     {
-        await _socketClient.ConnectAsync();
+        _client.Start();               // start the loop if it isn't running
+        _client.RequestReconnectNow(); // otherwise force an immediate retry
     }
 
-    private void SetConnectionStatus(bool connected)
+    private void SetConnectionStatus(DesktopConnectionState state)
     {
-        SetPill(WsStatusDot, WsStatusText, connected, connected ? "Connected" : "Disconnected");
-
-        // Registration always tracks the WebSocket connection here - a
-        // successful HelloAck is what raises ConnectionStatusChanged(true)
-        // in the first place, and losing the connection means the
-        // registration is gone with it.
-        SetPill(RegistrationStatusDot, RegistrationStatusText, connected, connected ? "Registered as Desktop" : "Not registered");
+        switch (state)
+        {
+            case DesktopConnectionState.Connected:
+                SetPill(WsStatusDot, WsStatusText, PillTone.Good, "Connected");
+                SetPill(RegistrationStatusDot, RegistrationStatusText, PillTone.Good, "Registered as Desktop");
+                break;
+            case DesktopConnectionState.Connecting:
+                SetPill(WsStatusDot, WsStatusText, PillTone.Warn, "Connecting…");
+                SetPill(RegistrationStatusDot, RegistrationStatusText, PillTone.Bad, "Not registered");
+                break;
+            case DesktopConnectionState.Reconnecting:
+                SetPill(WsStatusDot, WsStatusText, PillTone.Warn, "Reconnecting…");
+                SetPill(RegistrationStatusDot, RegistrationStatusText, PillTone.Bad, "Not registered");
+                break;
+            default:
+                SetPill(WsStatusDot, WsStatusText, PillTone.Bad, "Disconnected");
+                SetPill(RegistrationStatusDot, RegistrationStatusText, PillTone.Bad, "Not registered");
+                break;
+        }
     }
 
     private void SetApiKeyStatus(bool hasKey)
     {
-        SetPill(ApiKeyStatusDot, ApiKeyStatusText, hasKey, hasKey ? "Configured" : "Missing");
+        SetPill(ApiKeyStatusDot, ApiKeyStatusText, hasKey ? PillTone.Good : PillTone.Bad, hasKey ? "Configured" : "Missing");
     }
 
     private void SetCurrentRequestStatus(string? status)
@@ -84,12 +98,18 @@ public partial class MainWindow : Window
         ActivityLogScroll.ScrollToEnd();
     }
 
-    private static void SetPill(Ellipse dot, System.Windows.Controls.TextBlock text, bool positive, string label)
+    private enum PillTone { Good, Warn, Bad }
+
+    private static void SetPill(Ellipse dot, System.Windows.Controls.TextBlock text, PillTone tone, string label)
     {
         text.Text = label;
 
-        var dotColor = positive ? Color.FromRgb(0x34, 0xC7, 0x59) : Color.FromRgb(0xFF, 0x3B, 0x30);
-        var textColor = positive ? Color.FromRgb(0x1A, 0x7F, 0x37) : Color.FromRgb(0xB3, 0x26, 0x1E);
+        var (dotColor, textColor) = tone switch
+        {
+            PillTone.Good => (Color.FromRgb(0x34, 0xC7, 0x59), Color.FromRgb(0x1A, 0x7F, 0x37)),
+            PillTone.Warn => (Color.FromRgb(0xF5, 0x9E, 0x0B), Color.FromRgb(0xB4, 0x54, 0x09)),
+            _ => (Color.FromRgb(0xFF, 0x3B, 0x30), Color.FromRgb(0xB3, 0x26, 0x1E))
+        };
 
         dot.Fill = new SolidColorBrush(dotColor);
         text.Foreground = new SolidColorBrush(textColor);

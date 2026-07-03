@@ -12,6 +12,15 @@ services:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
       - webdesktopsocket-mysql-data:/var/lib/mysql
+    # Lets `docker compose up -d --wait` (and CI) block until MySQL is
+    # actually ready to accept connections, not just until the container
+    # has started. Uses the root password from the environment.
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
 volumes:
   webdesktopsocket-mysql-data:

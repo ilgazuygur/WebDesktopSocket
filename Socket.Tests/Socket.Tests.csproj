@@ -25,6 +25,9 @@
   <ItemGroup>
     <ProjectReference Include="..\SocketShared\SocketShared.csproj" />
     <ProjectReference Include="..\SocketWeb\SocketWeb.csproj" />
+    <ProjectReference Include="..\SocketDesktop.Core\SocketDesktop.Core.csproj" />
+    <ProjectReference Include="..\MockAiServer\MockAiServer.csproj" />
+    <ProjectReference Include="..\SocketDesktop.Avalonia\SocketDesktop.Avalonia.csproj" />
   </ItemGroup>
 
 </Project>
