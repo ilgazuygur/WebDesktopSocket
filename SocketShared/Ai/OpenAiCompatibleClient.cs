@@ -22,8 +22,8 @@ public sealed class OpenAiCompatibleClient : IAiClient
     private readonly HttpClient _httpClient;
     private readonly AiOptions _options;
 
-    // The HttpClient is injected (e.g. from IHttpClientFactory in the WPF
-    // host) rather than created here, so its lifetime, timeout and any
+    // The HttpClient is injected (e.g. from the desktop client's composition
+    // root) rather than created here, so its lifetime, timeout and any
     // handler pipeline (retries, proxies, ...) stay under the host's
     // control instead of being hidden inside this class.
     public OpenAiCompatibleClient(HttpClient httpClient, AiOptions options)

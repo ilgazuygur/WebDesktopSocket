@@ -7,8 +7,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SocketShared", "SocketShare
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SocketWeb", "SocketWeb\SocketWeb.csproj", "{347851E7-09F4-484E-8978-C7946C0635B2}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SocketDesktop", "SocketDesktop\SocketDesktop.csproj", "{A4F784D8-D775-44EE-9E81-8090771820C7}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Socket.Tests", "Socket.Tests\Socket.Tests.csproj", "{FC7ECBAF-BB4A-452C-AE40-0287F0E4F452}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SocketDesktop.Core", "SocketDesktop.Core\SocketDesktop.Core.csproj", "{2272F1CF-560A-4B52-AFDB-4B27A68017E0}"
@@ -33,10 +31,6 @@ Global
 		{347851E7-09F4-484E-8978-C7946C0635B2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{347851E7-09F4-484E-8978-C7946C0635B2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{347851E7-09F4-484E-8978-C7946C0635B2}.Release|Any CPU.Build.0 = Release|Any CPU
-		{A4F784D8-D775-44EE-9E81-8090771820C7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{A4F784D8-D775-44EE-9E81-8090771820C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{A4F784D8-D775-44EE-9E81-8090771820C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{A4F784D8-D775-44EE-9E81-8090771820C7}.Release|Any CPU.Build.0 = Release|Any CPU
 		{FC7ECBAF-BB4A-452C-AE40-0287F0E4F452}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{FC7ECBAF-BB4A-452C-AE40-0287F0E4F452}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FC7ECBAF-BB4A-452C-AE40-0287F0E4F452}.Release|Any CPU.ActiveCfg = Release|Any CPU

@@ -31,7 +31,6 @@ Thumbs.db
 *.env
 !.env.example
 appsettings.*.local.json
-SocketDesktop/appsettings.Local.json
 
 ## docker-compose MySQL data volume, if ever bind-mounted locally
 mysql-data/

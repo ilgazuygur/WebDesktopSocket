@@ -9,10 +9,10 @@ namespace Socket.Tests.Sockets;
 // Exercises the full Browser -> SocketWeb -> "fake Desktop" -> SocketWeb
 // -> Browser flow over two real WebSocket connections through TestServer.
 // The "fake Desktop" here is just a hand-rolled client that speaks the
-// same SocketMessage protocol SocketDesktop's DesktopSocketClient does -
+// same SocketMessage protocol the desktop client's DesktopSocketClient does -
 // it is a test double, not a second production desktop implementation,
-// and exists specifically so this flow can be verified on macOS without
-// a real Windows/WPF process or a live AI API.
+// and exists specifically so this flow can be verified on any OS without
+// a real desktop process or a live AI API.
 public class FakeDesktopClientIntegrationTests : IClassFixture<InMemoryWebApplicationFactory>
 {
     private readonly InMemoryWebApplicationFactory _factory;

@@ -16,9 +16,9 @@ namespace SocketDesktop.Core;
 // a single managed loop that connects, runs until the connection drops,
 // then automatically reconnects with bounded exponential backoff.
 //
-// This class has no WPF or Avalonia dependency, so both desktop UIs
-// (SocketDesktop.Avalonia and the legacy SocketDesktop WPF app) use it
-// unchanged, and it can be unit-tested against a fake IClientWebSocket.
+// This class has no Avalonia (or other UI) dependency, so the desktop UI
+// (SocketDesktop.Avalonia) uses it unchanged, and it can be unit-tested
+// against a fake IClientWebSocket.
 public sealed class DesktopSocketClient : IAsyncDisposable
 {
     private readonly IAiClient _aiClient;

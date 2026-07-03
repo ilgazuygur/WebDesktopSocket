@@ -7,7 +7,7 @@ namespace Socket.Tests.Ai;
 // Exercises OpenAiCompatibleClient against a stubbed HTTP handler, so no
 // real AI API or network access is needed to verify: success, auth
 // failure, timeout, other non-success statuses, and invalid JSON bodies -
-// the exact set of failure modes the internship brief calls out.
+// the full set of failure modes the client is expected to handle.
 public class OpenAiCompatibleClientTests
 {
     private const string DummyApiKey = "test-api-key-do-not-log";

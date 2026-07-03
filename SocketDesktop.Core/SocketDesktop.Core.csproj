@@ -12,9 +12,9 @@
 
   <ItemGroup>
     <!-- Loads non-secret defaults (appsettings.json) plus environment-
-         variable overrides into DesktopClientOptions. Shared by both the
-         Avalonia and legacy WPF desktop apps so the config logic isn't
-         duplicated. No UI dependency. -->
+         variable overrides into DesktopClientOptions. Used by the
+         SocketDesktop.Avalonia client so the config logic lives in one
+         place. No UI dependency. -->
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="8.0.0" />

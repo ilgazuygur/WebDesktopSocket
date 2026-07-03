@@ -2,11 +2,11 @@ using Microsoft.Extensions.Configuration;
 
 namespace SocketDesktop.Core;
 
-// Builds DesktopClientOptions from configuration, shared by both desktop
-// UIs (Avalonia and legacy WPF): non-secret defaults in appsettings.json
-// (Ai:BaseUrl, Ai:Model, optionally Socket:Url) plus environment-variable
-// overrides. The API key is read ONLY from the AI_API_KEY environment
-// variable and is never persisted, logged, or put in any committed file.
+// Builds DesktopClientOptions from configuration for the desktop client:
+// non-secret defaults in appsettings.json (Ai:BaseUrl, Ai:Model, optionally
+// Socket:Url) plus environment-variable overrides. The API key is read ONLY
+// from the AI_API_KEY environment variable and is never persisted, logged,
+// or put in any committed file.
 public static class DesktopConfiguration
 {
     public static DesktopClientOptions Load()
